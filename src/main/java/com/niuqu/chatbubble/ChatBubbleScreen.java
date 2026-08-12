@@ -912,7 +912,13 @@ public class ChatBubbleScreen extends ChatScreen {
                     return true;
                 }
                 if (click.getAction() == net.minecraft.network.chat.ClickEvent.Action.OPEN_URL) {
-                    handleComponentClicked(style);
+                    // Local file:// links (e.g. legacy chatimage messages) are not
+                    // browser URLs; opening them throws URISyntaxException. Only
+                    // hand http(s) to the vanilla handler.
+                    String clickUrl = click.getValue();
+                    if (clickUrl != null && (clickUrl.startsWith("http://") || clickUrl.startsWith("https://"))) {
+                        handleComponentClicked(style);
+                    }
                     return true;
                 }
                 handleComponentClicked(style);
@@ -1055,7 +1061,14 @@ public class ChatBubbleScreen extends ChatScreen {
             }
             String code = "[[CICode,url=" + url + "]]";
             String cur = input.getValue();
-            input.setValue(cur.isEmpty() ? code : cur + " " + code);
+            if (cur.contains("[[CICode,url=file://")) {
+                // Replace the local file:// CICode (chatimage drag/paste) with
+                // the real upload URL instead of appending a second link.
+                cur = cur.replaceFirst("\\[\\[CICode,url=file://[^]]*]]", code);
+            } else {
+                cur = cur.isEmpty() ? code : cur + " " + code;
+            }
+            input.setValue(cur);
             input.setCursorPosition(input.getValue().length());
         });
     }
@@ -1932,9 +1945,33 @@ public class ChatBubbleScreen extends ChatScreen {
             || (c >= 'K' && c <= 'O');
     }
 
+    /** Extracts the local path from [[CICode,url=file:///...]] (chatimage appends Windows backslash paths). */
+    private static String extractLocalPath(String cicode) {
+        int start = cicode.indexOf("url=file:///");
+        if (start < 0) return null;
+        start += "url=file:///".length();
+        int end = cicode.indexOf("]]", start);
+        if (end < 0) end = cicode.length();
+        String path = cicode.substring(start, end);
+        // file:///C:\... → C:\... (drop the leading slash before the drive letter)
+        if (path.startsWith("/") && path.length() > 1 && path.charAt(1) == ':') return path.substring(1);
+        return path;
+    }
+
     private void sendMessage() {
         String raw = input.getValue().trim();
         if (raw.isEmpty()) return;
+        if (raw.contains("[[CICode,url=file://")) {
+            // A local file:// CICode (chatimage's drag/paste handler inserts
+            // these) is a local-only broken link. Kick off our own upload and
+            // block the send until it replaces the link.
+            if (!uploading) {
+                String localPath = extractLocalPath(raw);
+                if (localPath != null) upload(new java.io.File(localPath));
+            }
+            Minecraft.getInstance().player.sendSystemMessage(Component.translatable("e33chat.upload.wait"));
+            return;
+        }
         // Send the text UNCHANGED (raw '&', never '§'): vanilla servers reject '§' in
         // player chat and kick, so converting client-side is a dead end. Server color
         // plugins (Essentials etc.) translate '&' for everyone; on plain servers others

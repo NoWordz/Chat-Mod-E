@@ -232,5 +232,6 @@
   "e33chat.config.upload_url.desc": "留空用默认图床（litterbox.catbox.moe，72小时过期）。自定义图床需支持 multipart POST：文件字段默认 fileToUpload，额外参数默认 time=72h，响应默认纯文本 URL（可在配置文件改 uploadField/uploadExtra/uploadResponse）",
   "e33chat.upload.button": "上传图片",
   "e33chat.upload.tooltip": "选择本地图片上传并插入消息（也可直接 Ctrl+V 粘贴剪贴板图片）",
-  "e33chat.upload.failed": "上传失败"
+  "e33chat.upload.failed": "上传失败",
+  "e33chat.upload.wait": "图片上传中，稍候再发"
 }

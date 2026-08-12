@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.3.16
+
+**修复（2.3.16）**
+- **拖拽图片不再插入 file:// 死链接**：chatimage 等 mod 会把拖入的本地图片插成 `[[CICode,url=file:///C:\...]]`（本地专用、带反斜杠的非法 URI，别人看不到）。现在：e33chat 上传完成后自动把输入框里的 file:// 链接替换成真实 URL；若发送时 file:// 还在（上传未完成），阻止发送并提示「图片上传中，稍候再发」（同时自动开始上传）
+- **修复点击 file:// 图片消息抛异常**：点击历史 file:// 图片会触发系统打开非法 URI（URISyntaxException 刷日志），现在只对 http(s) 链接响应点击
+
+**Fixes (2.3.16)**
+- Dragging an image no longer leaves a dead `file://` link in the input: mods like chatimage insert `[[CICode,url=file:///C:\...]]` (local-only, backslash URI). e33chat now replaces that link with the real upload URL once the upload finishes; if you press Enter before that, the send is blocked with a "wait" hint (and the upload is started automatically)
+- Fixed clicking file:// image messages throwing URISyntaxException; only http(s) links respond to clicks now
+
+## v2.3.15
+# Changelog
+
 ## v2.3.15
 
 **修复（2.3.15）**
