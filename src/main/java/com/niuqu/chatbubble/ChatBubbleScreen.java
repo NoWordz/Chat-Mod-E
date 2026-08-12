@@ -981,11 +981,7 @@ public class ChatBubbleScreen extends ChatScreen {
             if (emojiPanel.visible) emojiPanel.scroll = 0;
             return true;
         }
-        int uploadX = emojiX - ICON_S - 6;
-        if (mx >= uploadX && mx <= uploadX + ICON_S && my >= iconY && my <= iconY + ICON_S) {
-            startUploadFromFile();
-            return true;
-        }
+
         // Send icon (right)
         if (mx >= sendX && mx <= sendX + ICON_S && my >= iconY && my <= iconY + ICON_S) {
             sendMessage();
@@ -997,22 +993,18 @@ public class ChatBubbleScreen extends ChatScreen {
 
     // ---- Local image upload (2.3.11) ----
 
-    private void startUploadFromFile() {
+    /** OS file drag onto the window (vanilla drop hook): upload the first image dropped. */
+    @Override
+    public void onFilesDrop(java.util.List<java.nio.file.Path> paths) {
         if (uploading) return;
-        if (java.awt.GraphicsEnvironment.isHeadless()) { uploadToastTicks = 60; return; }
-        java.awt.FileDialog fd = new java.awt.FileDialog((java.awt.Frame) null,
-            Component.translatable("e33chat.upload.button").getString(), java.awt.FileDialog.LOAD);
-        fd.setFilenameFilter((dir, name) -> {
-            String l = name.toLowerCase();
-            return l.endsWith(".png") || l.endsWith(".jpg") || l.endsWith(".jpeg")
-                || l.endsWith(".gif") || l.endsWith(".bmp") || l.endsWith(".webp");
-        });
-        fd.setVisible(true); // blocks until the dialog closes (AWT pumps its own events)
-        String dir = fd.getDirectory();
-        String file = fd.getFile();
-        fd.dispose();
-        if (dir == null || file == null) return;
-        upload(new java.io.File(dir, file));
+        for (java.nio.file.Path p : paths) {
+            String l = p.getFileName().toString().toLowerCase();
+            if (l.endsWith(".png") || l.endsWith(".jpg") || l.endsWith(".jpeg")
+                    || l.endsWith(".gif") || l.endsWith(".bmp") || l.endsWith(".webp")) {
+                upload(p.toFile());
+                return;
+            }
+        }
     }
 
     private void startUploadFromClipboard() {
@@ -1756,22 +1748,6 @@ public class ChatBubbleScreen extends ChatScreen {
         int iconY2 = barTop + (BAR_H - ICON_S) / 2;
         int sendX2 = panelX + panelW - ChatLayout.PAD - ICON_S + 2;
         int emojiX2 = sendX2 - ICON_S - 6;
-        int uploadX2 = emojiX2 - ICON_S - 6;
-        boolean hoverUpload = mouseX >= uploadX2 && mouseX <= uploadX2 + ICON_S
-            && mouseY >= iconY2 && mouseY <= iconY2 + ICON_S;
-        if (hoverUpload) com.niuqu.chatbubble.texture.ColoredTextureRenderer.drawWithAlpha(g, UiTextureManager.rl(UiElement.HOVER_BG), uploadX2 - 1, iconY2 - 1, ICON_S + 2, ICON_S + 2, panelAlpha);
-        String uploadIcon = uploading ? "…" : "+";
-        int uploadColor = ChatBubbleTheme.alphaBlend(c().textPrimary(), (int) (255 * getAnimProgress()));
-        g.drawString(font, uploadIcon, uploadX2 + (ICON_S - font.width(uploadIcon)) / 2,
-            iconY2 + (ICON_S - font.lineHeight) / 2, uploadColor, false);
-        if (hoverUpload) {
-            String tip = Component.translatable("e33chat.upload.tooltip").getString();
-            int tw = font.width(tip);
-            int tipX = Math.min(uploadX2 - tw - 10, panelX + panelW - tw - 4);
-            int tipY = iconY2 - 14;
-            g.fill(tipX - 3, tipY - 2, tipX + tw + 3, tipY + font.lineHeight + 2, 0xCC000000);
-            g.drawString(font, tip, tipX, tipY, 0xFFFFFFFF, false);
-        }
     }
 
     static void drawTextureIcon(GuiGraphics g, ResourceLocation tex, int x, int y, int size) {

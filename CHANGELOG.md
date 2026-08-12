@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.3.14
+
+**改动（2.3.14）**
+- 移除输入框左侧的 `+` 上传按钮（不再需要点按钮选图）
+- **拖拽上传**：直接把图片文件拖进游戏窗口即可上传（支持 png/jpg/jpeg/gif/bmp/webp，取第一个图片）；Ctrl+V 粘贴上传保留
+
+**Changes (2.3.14)**
+- Removed the `+` upload button next to the chat input
+- **Drag & drop upload**: drop an image file onto the game window to upload it (png/jpg/jpeg/gif/bmp/webp, first image wins); Ctrl+V paste upload kept
+
+## v2.3.13
+
+
 ## v2.3.13
 
 **新功能（2.3.13）**
@@ -27,6 +40,19 @@
 ## v2.3.11
 # Changelog
 
+## v2.3.14
+
+**改动（2.3.14）**
+- 移除输入框左侧的 `+` 上传按钮（不再需要点按钮选图）
+- **拖拽上传**：直接把图片文件拖进游戏窗口即可上传（支持 png/jpg/jpeg/gif/bmp/webp，取第一个图片）；Ctrl+V 粘贴上传保留
+
+**Changes (2.3.14)**
+- Removed the `+` upload button next to the chat input
+- **Drag & drop upload**: drop an image file onto the game window to upload it (png/jpg/jpeg/gif/bmp/webp, first image wins); Ctrl+V paste upload kept
+
+## v2.3.13
+
+
 ## v2.3.11
 
 **新功能（2.3.11）**
@@ -41,6 +67,19 @@
 
 ## v2.3.10
 # Changelog
+
+## v2.3.14
+
+**改动（2.3.14）**
+- 移除输入框左侧的 `+` 上传按钮（不再需要点按钮选图）
+- **拖拽上传**：直接把图片文件拖进游戏窗口即可上传（支持 png/jpg/jpeg/gif/bmp/webp，取第一个图片）；Ctrl+V 粘贴上传保留
+
+**Changes (2.3.14)**
+- Removed the `+` upload button next to the chat input
+- **Drag & drop upload**: drop an image file onto the game window to upload it (png/jpg/jpeg/gif/bmp/webp, first image wins); Ctrl+V paste upload kept
+
+## v2.3.13
+
 
 ## v2.3.10
 
@@ -64,6 +103,19 @@
 
 ## v2.3.9
 # Changelog
+
+## v2.3.14
+
+**改动（2.3.14）**
+- 移除输入框左侧的 `+` 上传按钮（不再需要点按钮选图）
+- **拖拽上传**：直接把图片文件拖进游戏窗口即可上传（支持 png/jpg/jpeg/gif/bmp/webp，取第一个图片）；Ctrl+V 粘贴上传保留
+
+**Changes (2.3.14)**
+- Removed the `+` upload button next to the chat input
+- **Drag & drop upload**: drop an image file onto the game window to upload it (png/jpg/jpeg/gif/bmp/webp, first image wins); Ctrl+V paste upload kept
+
+## v2.3.13
+
 
 ## v2.3.9
 
