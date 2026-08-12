@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.3.12
+
+**新功能（2.3.12）**
+- **行内表情（三端）**：聊天消息里的 `[:token]` 现在渲染为行内小表情图片（如 `[:happy]` `[:love]` `[:laugh]`）。内置 12 个代码生成的像素表情（happy/sad/angry/love/thumb/ok/cry/laugh/wow/sleep/cool/fire），零外部依赖；也可在 `config/e33chat-emote.json` 自定义 token→图片 URL（如 `{"kusa": "https://..."}`），自定义表情走图片加载管线（含防刷屏/缓存）。未注册的 token 原样显示为文本
+- 表情跟随消息样式（颜色/下划线保留），发送侧零改动（直接输入 `[:happy]` 即可）
+
+**New (2.3.12)**
+- **Inline emotes (all platforms)**: `[:token]` codes render as inline emote images (`[:happy]` `[:love]` `[:laugh]` …). 12 built-in code-generated pixel emotes (happy/sad/angry/love/thumb/ok/cry/laugh/wow/sleep/cool/fire) with zero external dependencies; custom tokens go in `config/e33chat-emote.json` as token→image URL (e.g. `{"kusa": "https://..."}`) and load through the shared image pipeline (anti-flood/cache included). Unknown tokens stay as literal text
+- Emotes follow message styling (colors/underline preserved); sending needs no changes — just type `[:happy]`
+
+## v2.3.11
+# Changelog
+
 ## v2.3.11
 
 **新功能（2.3.11）**
