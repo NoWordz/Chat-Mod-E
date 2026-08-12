@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.3.13
+
+**新功能（2.3.13）**
+- **服务端媒体直传**：当服务器也装了 e33chat 时，聊天图片上传直接存到服务器（`config/e33chat-media/`，`e33chat://media/<id>` 链接，永久不过期），不再受第三方图床 72h 过期限制；服务器没装/未开启时自动回退原图床，无感
+- 服务器配置 `serverconfig/e33chat-server.json` 的 `media_enabled`（默认 true）控制开关；单文件上限 8MB、总配额 512MB；媒体 ID 为随机 UUID，防遍历
+- 接收端无感：老链接（第三方图床 URL）照常显示；服务端直传图片也走同一渲染管线（防刷屏/缓存/缩放）
+
+**New (2.3.13)**
+- **Server-side media hosting**: when the server runs e33chat too, chat image uploads are stored on the server (`config/e33chat-media/`, `e33chat://media/<id>` links, permanent) instead of the third-party host's 72h expiry; falls back to the old host automatically when the server lacks/disabled it
+- Toggle via `media_enabled` in `serverconfig/e33chat-server.json` (default true); 8 MB per file, 512 MB total quota; random UUID media IDs prevent URL guessing
+- Receiving is unchanged: legacy third-party URLs still render; server-hosted images flow through the same pipeline (anti-flood/cache/scale)
+
+## v2.3.12
+
 ## v2.3.12
 
 **新功能（2.3.12）**

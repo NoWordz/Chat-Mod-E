@@ -1042,9 +1042,15 @@ public class ChatBubbleScreen extends ChatScreen {
     }
 
     private void finishUpload(LocalImageSource.PreparedImage prep, String srcName) {
-        String url = com.niuqu.chatbubble.image.ImageUploader.upload(prep.bytes(), prep.fileName(),
-            ChatBubbleConfig.UPLOAD_URL.get(), ChatBubbleConfig.UPLOAD_FIELD.get(),
-            ChatBubbleConfig.UPLOAD_EXTRA.get(), ChatBubbleConfig.UPLOAD_RESPONSE.get());
+        String serverUrl = com.niuqu.chatbubble.image.MediaClient.serverEnabled()
+            ? com.niuqu.chatbubble.image.MediaClient.upload(prep.bytes(), "image/png")
+            : null;
+        // Server hosting unavailable (not installed / disabled / failed) — fall back to third-party
+        final String url = serverUrl != null
+            ? serverUrl
+            : com.niuqu.chatbubble.image.ImageUploader.upload(prep.bytes(), prep.fileName(),
+                ChatBubbleConfig.UPLOAD_URL.get(), ChatBubbleConfig.UPLOAD_FIELD.get(),
+                ChatBubbleConfig.UPLOAD_EXTRA.get(), ChatBubbleConfig.UPLOAD_RESPONSE.get());
         com.mojang.logging.LogUtils.getLogger().info("[e33chat] upload {} -> {}", srcName, url == null ? "FAILED" : url);
         minecraft.execute(() -> {
             uploading = false;
