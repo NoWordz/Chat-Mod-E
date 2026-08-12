@@ -28,7 +28,8 @@ public final class ImageUploader {
 
     public static final String DEFAULT_URL = "https://litterbox.catbox.moe/resources/internals/api.php";
     public static final String DEFAULT_FIELD = "fileToUpload";
-    public static final String DEFAULT_EXTRA = "time=72h";
+    // Litterbox requires reqtype=fileupload; omitting it returns 412 "No request type given"
+    public static final String DEFAULT_EXTRA = "reqtype=fileupload,time=72h";
     public static final String DEFAULT_RESPONSE = "text";
 
     private static final int MAX_UPLOAD_BYTES = 16 * 1024 * 1024;
@@ -46,6 +47,11 @@ public final class ImageUploader {
         String endpoint = (url == null || url.isBlank()) ? DEFAULT_URL : url.trim();
         String fld = (field == null || field.isBlank()) ? DEFAULT_FIELD : field.trim();
         String extraFields = (extra == null || extra.isBlank()) ? DEFAULT_EXTRA : extra;
+        // Legacy configs saved the extra params without reqtype (412 on Litterbox);
+        // inject it for the default host so old configs keep working.
+        if (endpoint.equals(DEFAULT_URL) && !extraFields.contains("reqtype")) {
+            extraFields = "reqtype=fileupload," + extraFields;
+        }
         String mode = (responseMode == null || responseMode.isBlank()) ? DEFAULT_RESPONSE : responseMode.trim();
 
         try {

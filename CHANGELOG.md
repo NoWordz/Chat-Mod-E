@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.3.15
+
+**修复（2.3.15）**
+- **修复本地图片上传一直失败**：Litterbox 需要 `reqtype=fileupload` 参数，旧版本漏了导致 HTTP 412（图从来传不上去）；旧配置文件自动注入修复
+- **修复拖拽图片后输入框键盘失效**：拖放会抢走窗口焦点，现在自动把焦点还给聊天输入框
+
+**Fixes (2.3.15)**
+- Fixed local image upload failing with HTTP 412: Litterbox requires `reqtype=fileupload`, which was missing; legacy configs get it injected automatically
+- Fixed keyboard input dying after dragging an image: the OS drop steals window focus; it is now handed back to the chat input
+
+## v2.3.14
+# Changelog
+
 ## v2.3.14
 
 **改动（2.3.14）**

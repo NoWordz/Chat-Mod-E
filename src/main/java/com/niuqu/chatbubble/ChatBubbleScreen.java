@@ -1002,6 +1002,9 @@ public class ChatBubbleScreen extends ChatScreen {
             if (l.endsWith(".png") || l.endsWith(".jpg") || l.endsWith(".jpeg")
                     || l.endsWith(".gif") || l.endsWith(".bmp") || l.endsWith(".webp")) {
                 upload(p.toFile());
+                // The OS drop can steal window focus; give it back to the chat input
+                // so typing keeps working right after a drag.
+                Minecraft.getInstance().execute(() -> setFocused(input));
                 return;
             }
         }
