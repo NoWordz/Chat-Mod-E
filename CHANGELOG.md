@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.3.11
+
+**新功能（2.3.11）**
+- **发送本地图片（三端）**：聊天栏新增「+」上传按钮（表情按钮左侧）——点击弹出文件选择框，选中图片自动上传到图床并生成 `[[CICode,url=...]]` 插入输入框（回车即发送，与手打图片代码完全一致）。也支持 **Ctrl+V 直接粘贴剪贴板里的图片**。上传前自动缩放（长边 ≤2048）并重编码，保证上传快、稳定
+- **图床可配置（三端）**：默认使用 Litterbox（litterbox.catbox.moe）——实测 Catbox 主域在当前网络不可达，姊妹域可用；文件 72 小时过期。如需自建/自选图床，可在配置界面「高级」→「图床地址」填写：需支持 multipart POST 上传，文件字段默认 `fileToUpload`，额外参数默认 `time=72h`，响应默认纯文本 URL——`uploadField`/`uploadExtra`/`uploadResponse`（支持 `json:<字段>` 响应解析）可在配置文件自定义
+- **上传状态反馈（三端）**：上传中按钮显示「…」，失败弹出红色提示
+
+**New (2.3.11)**
+- **Send local images (all platforms)**: new "+" upload button in the chat bar (left of the emoji button) opens a file picker — the chosen image is uploaded to a file host and a `[[CICode,url=...]]` code is inserted into the input box (press Enter to send, identical to typing the code by hand). **Ctrl+V also works** with an image in the clipboard. Images are scaled (long edge ≤2048) and re-encoded before upload for speed and reliability
+- **Configurable host (all platforms)**: defaults to Litterbox (litterbox.catbox.moe) — Catbox's main domain was unreachable in the current network while the sister domain works; files expire after 72h. For a custom host, fill in "Upload host URL" under Advanced in the config screen: any multipart POST endpoint works, file field defaults to `fileToUpload`, extra fields to `time=72h`, plain-text URL response (or `json:<field>` parsing via `uploadResponse`); `uploadField`/`uploadExtra`/`uploadResponse` are editable in the config file
+- **Upload feedback (all platforms)**: the button shows "…" while uploading and a red toast on failure
+
+## v2.3.10
+# Changelog
+
 ## v2.3.10
 
 **新功能（2.3.10）**

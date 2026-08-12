@@ -27,6 +27,9 @@ import com.niuqu.chatbubble.texture.UiElement;
 import com.niuqu.chatbubble.texture.UiTextureManager;
 import com.niuqu.chatbubble.render.ChatContextMenus;
 import com.niuqu.chatbubble.render.ChatLayout;
+import com.niuqu.chatbubble.image.ImageLoader;
+import com.niuqu.chatbubble.image.ImageUploader;
+import com.niuqu.chatbubble.image.LocalImageSource;
 import com.niuqu.chatbubble.render.ChatMessageRenderer;
 import com.niuqu.chatbubble.render.ChatScrollbar;
 import com.niuqu.chatbubble.render.ChatSidebar;
@@ -161,6 +164,8 @@ public class ChatBubbleScreen extends ChatScreen {
 
     // Copy toast
     private int copyToastTicks;
+    private boolean uploading = false;
+    private int uploadToastTicks = 0;
 
     // Animations
     private long animStart;
@@ -976,12 +981,82 @@ public class ChatBubbleScreen extends ChatScreen {
             if (emojiPanel.visible) emojiPanel.scroll = 0;
             return true;
         }
+        int uploadX = emojiX - ICON_S - 6;
+        if (mx >= uploadX && mx <= uploadX + ICON_S && my >= iconY && my <= iconY + ICON_S) {
+            startUploadFromFile();
+            return true;
+        }
         // Send icon (right)
         if (mx >= sendX && mx <= sendX + ICON_S && my >= iconY && my <= iconY + ICON_S) {
             sendMessage();
             return true;
         }
         return false;
+    }
+
+
+    // ---- Local image upload (2.3.11) ----
+
+    private void startUploadFromFile() {
+        if (uploading) return;
+        if (java.awt.GraphicsEnvironment.isHeadless()) { uploadToastTicks = 60; return; }
+        java.awt.FileDialog fd = new java.awt.FileDialog((java.awt.Frame) null,
+            Component.translatable("e33chat.upload.button").getString(), java.awt.FileDialog.LOAD);
+        fd.setFilenameFilter((dir, name) -> {
+            String l = name.toLowerCase();
+            return l.endsWith(".png") || l.endsWith(".jpg") || l.endsWith(".jpeg")
+                || l.endsWith(".gif") || l.endsWith(".bmp") || l.endsWith(".webp");
+        });
+        fd.setVisible(true); // blocks until the dialog closes (AWT pumps its own events)
+        String dir = fd.getDirectory();
+        String file = fd.getFile();
+        fd.dispose();
+        if (dir == null || file == null) return;
+        upload(new java.io.File(dir, file));
+    }
+
+    private void startUploadFromClipboard() {
+        if (uploading) return;
+        LocalImageSource.PreparedImage prep;
+        try {
+            prep = LocalImageSource.fromClipboard();
+        } catch (Throwable t) {
+            prep = null;
+        }
+        if (prep == null) return; // no image in clipboard — let vanilla paste text
+        final LocalImageSource.PreparedImage fprep = prep;
+        uploading = true;
+        com.niuqu.chatbubble.image.ImageLoader.executor().execute(() -> finishUpload(fprep, "clipboard"));
+    }
+
+    private void upload(java.io.File f) {
+        uploading = true;
+        com.niuqu.chatbubble.image.ImageLoader.executor().execute(() -> {
+            LocalImageSource.PreparedImage prep = LocalImageSource.fromFile(f);
+            if (prep == null) {
+                minecraft.execute(() -> { uploading = false; uploadToastTicks = 60; });
+                return;
+            }
+            finishUpload(prep, f.getName());
+        });
+    }
+
+    private void finishUpload(LocalImageSource.PreparedImage prep, String srcName) {
+        String url = com.niuqu.chatbubble.image.ImageUploader.upload(prep.bytes(), prep.fileName(),
+            ChatBubbleConfig.UPLOAD_URL.get(), ChatBubbleConfig.UPLOAD_FIELD.get(),
+            ChatBubbleConfig.UPLOAD_EXTRA.get(), ChatBubbleConfig.UPLOAD_RESPONSE.get());
+        com.mojang.logging.LogUtils.getLogger().info("[e33chat] upload {} -> {}", srcName, url == null ? "FAILED" : url);
+        minecraft.execute(() -> {
+            uploading = false;
+            if (url == null) {
+                uploadToastTicks = 60;
+                return;
+            }
+            String code = "[[CICode,url=" + url + "]]";
+            String cur = input.getValue();
+            input.setValue(cur.isEmpty() ? code : cur + " " + code);
+            input.setCursorPosition(input.getValue().length());
+        });
     }
 
     private void handleContextClick(int mx, int my) {
@@ -1579,7 +1654,20 @@ public class ChatBubbleScreen extends ChatScreen {
     }
 
     private void renderToast(GuiGraphics g) {
-        if (copyToastTicks <= 0) return;
+        if (copyToastTicks <= 0 && uploadToastTicks <= 0) return;
+        if (uploadToastTicks > 0) {
+            uploadToastTicks--;
+            if (uploadToastTicks <= 0) return;
+            int alpha = Animation.fadeInOut(uploadToastTicks, 5, 20, 5);
+            int color = (alpha << 24) | 0x00FF5555;
+            String text = Component.translatable("e33chat.upload.failed").getString();
+            int tw = font.width(text);
+            int tx = UiLayout.centerX(panelX, panelW, tw);
+            int ty = msgBottom - 24;
+            g.fill(tx - 4, ty - 2, tx + tw + 4, ty + font.lineHeight + 2, (alpha << 24) | 0x000000);
+            g.drawString(font, text, tx, ty, color, false);
+            return;
+        }
         int alpha = Animation.fadeInOut(copyToastTicks, 5, 20, 5);
         int color = (alpha << 24) | (c().toastText() & 0x00FFFFFF);
         String text = Component.translatable("e33chat.toast.copied").getString();
@@ -1658,6 +1746,26 @@ public class ChatBubbleScreen extends ChatScreen {
         ChatBars.renderBottomBar(g, font, mouseX, mouseY, c(), panelX, panelW, barTop, height,
             inputX, inputY, input.getWidth(), input.isFocused(), emojiPanel.visible,
             iconTex("settings"), iconTex("emoji"), iconTex("send"), panelAlpha, getAnimProgress());
+
+        int iconY2 = barTop + (BAR_H - ICON_S) / 2;
+        int sendX2 = panelX + panelW - ChatLayout.PAD - ICON_S + 2;
+        int emojiX2 = sendX2 - ICON_S - 6;
+        int uploadX2 = emojiX2 - ICON_S - 6;
+        boolean hoverUpload = mouseX >= uploadX2 && mouseX <= uploadX2 + ICON_S
+            && mouseY >= iconY2 && mouseY <= iconY2 + ICON_S;
+        if (hoverUpload) com.niuqu.chatbubble.texture.ColoredTextureRenderer.drawWithAlpha(g, UiTextureManager.rl(UiElement.HOVER_BG), uploadX2 - 1, iconY2 - 1, ICON_S + 2, ICON_S + 2, panelAlpha);
+        String uploadIcon = uploading ? "…" : "+";
+        int uploadColor = ChatBubbleTheme.alphaBlend(c().textPrimary(), (int) (255 * getAnimProgress()));
+        g.drawString(font, uploadIcon, uploadX2 + (ICON_S - font.width(uploadIcon)) / 2,
+            iconY2 + (ICON_S - font.lineHeight) / 2, uploadColor, false);
+        if (hoverUpload) {
+            String tip = Component.translatable("e33chat.upload.tooltip").getString();
+            int tw = font.width(tip);
+            int tipX = Math.min(uploadX2 - tw - 10, panelX + panelW - tw - 4);
+            int tipY = iconY2 - 14;
+            g.fill(tipX - 3, tipY - 2, tipX + tw + 3, tipY + font.lineHeight + 2, 0xCC000000);
+            g.drawString(font, tip, tipX, tipY, 0xFFFFFFFF, false);
+        }
     }
 
     static void drawTextureIcon(GuiGraphics g, ResourceLocation tex, int x, int y, int size) {

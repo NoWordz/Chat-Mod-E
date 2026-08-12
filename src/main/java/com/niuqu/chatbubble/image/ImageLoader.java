@@ -56,6 +56,12 @@ public final class ImageLoader {
         .followRedirects(HttpClient.Redirect.NORMAL)
         .build();
 
+    /** Shared HTTP client (also used by ImageUploader). */
+    public static HttpClient client() { return CLIENT; }
+
+    /** Shared worker pool (also used by ImageUploader). */
+    public static java.util.concurrent.ExecutorService executor() { return EXEC; }
+
     private static final int MAX_RECEIVE_BYTES = 16 * 1024 * 1024;
     // Direct fetches can be slow (TLS handshake + multi-hundred-KB bodies took
     // ~12s in the user's environment); keep the budget generous so a slow-but-
