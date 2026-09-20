@@ -357,4 +357,53 @@ class MessagePresentationTest {
         assertEquals("S§6t§beve", text.substring(pl.nameStart(), pl.nameEnd()));
         assertEquals("hi", text.substring(pl.contentStart()).strip());
     }
+
+    // ---- rank/title separators inside balanced brackets (P1: latest (5) follow-up) ----
+
+    @Test void parsesRankPipeInsideBracket() {
+        var parsed = MessagePresentation.parseDecoratedPlayerLine(
+            "[Lv.10|VIP] Steve: hello", List.of("Steve"));
+        assertTrue(parsed.isPresent());
+        assertEquals("Steve", parsed.orElseThrow().playerName());
+        assertEquals("hello", parsed.orElseThrow().content());
+    }
+
+    @Test void parsesChineseBracketRankWithChevron() {
+        var parsed = MessagePresentation.parseDecoratedPlayerLine(
+            "【Lv.10|VIP】Steve » hello", List.of("Steve"));
+        assertTrue(parsed.isPresent());
+        assertEquals("Steve", parsed.orElseThrow().playerName());
+        assertEquals("hello", parsed.orElseThrow().content());
+    }
+
+    @Test void parsesMultiBracketPrefixWithPipe() {
+        var parsed = MessagePresentation.parseDecoratedPlayerLine(
+            "[世界] [Lv.10|VIP] Steve: hello", List.of("Steve"));
+        assertTrue(parsed.isPresent());
+        assertEquals("hello", parsed.orElseThrow().content());
+    }
+
+    @Test void parsesSuffixBracketTitleAfterRankPrefix() {
+        var parsed = MessagePresentation.parseDecoratedPlayerLine(
+            "[Lv.10|VIP] Steve [AFK]: hello", List.of("Steve"));
+        assertTrue(parsed.isPresent());
+        assertEquals("hello", parsed.orElseThrow().content());
+    }
+
+    @Test void rejectsBarePipeBeforeNameStill() {
+        assertTrue(MessagePresentation.parseDecoratedPlayerLine(
+            "VIP|Steve: hi", List.of("Steve")).isEmpty());
+    }
+
+    @Test void rejectsBroadcastLabelInsidePipeBracket() {
+        assertTrue(MessagePresentation.parseDecoratedPlayerLine(
+            "[系统|公告]Steve: hi", List.of("Steve")).isEmpty());
+    }
+
+    @Test void balancedAngleWrapperWithInnerTagStillParses() {
+        var parsed = MessagePresentation.parseDecoratedPlayerLine(
+            "<[VIP]Steve> hello", List.of("Steve"));
+        assertTrue(parsed.isPresent());
+        assertEquals("hello", parsed.orElseThrow().content());
+    }
 }

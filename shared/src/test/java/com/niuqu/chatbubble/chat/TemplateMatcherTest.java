@@ -359,4 +359,21 @@ class TemplateMatcherTest {
         assertTrue(r.whisper());
         assertEquals("Alex", r.sender());
     }
+
+    // ---- inferFromMessage: rank decorations with separators (P1) ----
+
+    @Test void infersTemplateFromRankPipePrefix() {
+        Optional<String> tpl = TemplateMatcher.inferFromMessage(
+            "[Lv.10|VIP] Steve: hello", List.of("Steve"));
+        assertTrue(tpl.isPresent());
+        String raw = tpl.orElseThrow();
+        assertTrue(raw.contains("{display_name}"));
+        assertTrue(raw.contains("{content}"));
+        assertNull(TemplateMatcher.compile(raw).error());
+    }
+
+    @Test void inferStillRejectsBroadcastSpoof() {
+        assertTrue(TemplateMatcher.inferFromMessage(
+            "系统>>Steve: hi", List.of("Steve")).isEmpty());
+    }
 }

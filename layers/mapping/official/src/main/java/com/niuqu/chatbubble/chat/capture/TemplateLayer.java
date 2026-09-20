@@ -21,6 +21,10 @@ public final class TemplateLayer {
     private static int templateMissBurst;
 
     public static void logTemplateMiss(String text) {
+        logTemplateMiss(text, "System");
+    }
+
+    public static void logTemplateMiss(String text, String logTag) {
         if (!ChatMessageStore.serverTemplateDebug()) return;
         long now = System.currentTimeMillis();
         if (now - templateMissWindowStart >= 60_000) {
@@ -33,7 +37,7 @@ public final class TemplateLayer {
         StringBuilder tpl = new StringBuilder();
         for (var t : ChatMessageStore.serverChatTemplates()) tpl.append("\n  chat: ").append(t.raw());
         for (var t : ChatMessageStore.serverWhisperTemplates()) tpl.append("\n  whisper: ").append(t.raw());
-        ChatMessageStore.debugLog(() -> "[e33chat] System(template miss) | text='" + s + "' | templates=" + tpl);
+        ChatMessageStore.debugLog(() -> "[e33chat] " + logTag + "(template miss) | text='" + s + "' | templates=" + tpl);
     }
 
     public static boolean isTemplateNameKnown(String name) {
@@ -53,6 +57,10 @@ public final class TemplateLayer {
     // Returns null on no match (fall back to the guards) or when the line is our
     // own echo (already bubbled via the authoritative player channel / suppressed).
     public static ChatMessageStore.SenderMeta matchByTemplate(Component message, String text) {
+        return matchByTemplate(message, text, "System");
+    }
+
+    public static ChatMessageStore.SenderMeta matchByTemplate(Component message, String text, String logTag) {
         var r = TemplateMatcher.match(text, ChatMessageStore.serverChatTemplates(),
             ChatMessageStore.serverWhisperTemplates(), TemplateLayer::isTemplateNameKnown);
         if (r.isEmpty()) {
@@ -71,21 +79,21 @@ public final class TemplateLayer {
                 // outgoing whisper echo — never bubble a second copy; the suppress
                 // flag absorbs it when the pipeline reaches addMessage
                 ChatMessageStore.markSuppressCapture();
-                ChatMessageStore.debugLog(() -> "[e33chat] System(template outgoing whisper) | text='" + text + "'");
+                ChatMessageStore.debugLog(() -> "[e33chat] " + logTag + "(template outgoing whisper) | text='" + text + "'");
                 return null;
             }
             // own public echo: the authoritative player channel already bubbled it;
             // keep the decorated name for repost/echo rendering
             ChatMessageStore.cacheOwnDecoratedName(
                 templateSlice(message, text, tpl.nameStart(), tpl.nameEnd()));
-            ChatMessageStore.debugLog(() -> "[e33chat] System(template own line) | text='" + text + "'");
+            ChatMessageStore.debugLog(() -> "[e33chat] " + logTag + "(template own line) | text='" + text + "'");
             return null;
         }
         Component nameComp = templateSlice(message, text, tpl.nameStart(), tpl.nameEnd());
         Component contentComp = templateSlice(message, text, tpl.contentStart(), tpl.contentEnd());
         boolean whisper = tpl.whisper();
         String partner = whisper ? tpl.sender() : null;
-        ChatMessageStore.debugLog(() -> "[e33chat] System(template) | text='" + text + "' | name='" + nameComp.getString() + "' | whisper=" + whisper + " | partner=" + partner + " | content='" + contentComp.getString() + "'");
+        ChatMessageStore.debugLog(() -> "[e33chat] " + logTag + "(template) | text='" + text + "' | name='" + nameComp.getString() + "' | whisper=" + whisper + " | partner=" + partner + " | content='" + contentComp.getString() + "'");
         return new ChatMessageStore.SenderMeta(uid != null ? uid : new UUID(0, 0), nameComp, contentComp,
             false, rawName, whisper, partner);
     }

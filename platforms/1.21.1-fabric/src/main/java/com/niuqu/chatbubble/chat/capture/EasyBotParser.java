@@ -54,6 +54,22 @@ public final class EasyBotParser {
         "系统", "公告", "服务器", "广播", "提示", "通知",
         "system", "server", "notice", "broadcast", "announcement", "alert");
 
+    /**
+     * Labels that mark a colon-shaped line as a system/plugin prompt rather
+     * than a QQ relay: "[玩家系统]", "[音乐系统]", "[任务系统]" are all
+     * "<domain>系统" plugin prefixes, while EasyBot's "[QQ群消息]" is a group
+     * name. Blank labels are not trustworthy either. Only the colon shape uses
+     * this gate — the angle-bracket shape carries a stronger structural signal.
+     */
+    private static boolean isSystemLikeLabel(String label) {
+        if (label == null || label.isBlank()) return true;
+        String s = label.trim().toLowerCase(java.util.Locale.ROOT);
+        for (String token : BROADCAST_LABELS) {
+            if (s.contains(token)) return true;
+        }
+        return s.endsWith("系统") || s.endsWith("插件") || s.endsWith("助手");
+    }
+
     public static ChatMessageStore.SenderMeta tryParse(Text message, String text) {
         if (text == null || text.isEmpty()) return null;
         Matcher angle = RELAY_FORMAT.matcher(text);
@@ -66,7 +82,16 @@ public final class EasyBotParser {
         // longest-first, that composite then won every later match. Claiming the
         // line here keeps the name clean and stops the cache from ratcheting.
         Matcher colon = RELAY_COLON_FORMAT.matcher(text);
-        if (colon.matches()) return build(message, colon, false);
+        if (colon.matches()) {
+            // The colon shape has no <> / QQ-number structure, so gate it hard:
+            // "[玩家系统] 请使用以下命令登录: /log <密码>" is a plugin system
+            // prompt, not a chat relay (latest (5).log). Prefer gray over
+            // misattribution: system-domain labels and command text are not relays.
+            if (isSystemLikeLabel(colon.group(1))) return null;
+            String colonContent = colon.group(3);
+            if (colonContent != null && colonContent.stripLeading().startsWith("/")) return null;
+            return build(message, colon, false);
+        }
         return null;
     }
 

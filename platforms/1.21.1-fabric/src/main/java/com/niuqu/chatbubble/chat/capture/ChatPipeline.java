@@ -77,6 +77,10 @@ public final class ChatPipeline {
         var parsed = MessagePresentation.parseDecoratedPlayerLine(text, onlineNames);
         if (!parsed.isPresent()) return null;
         var pl = parsed.orElseThrow();
+        if (pl.playerName() == null || pl.playerName().isBlank()) {
+            ChatMessageStore.debugLog(() -> "[e33chat] " + logTag + "(blank display) | text='" + text + "'");
+            return null;
+        }
         // 偏移来自 parser（双侧剥 § 后的映射），嵌色名 S§6t§beve 也正确
         int nameIdx = pl.nameStart();
         int nameEnd = pl.nameEnd();

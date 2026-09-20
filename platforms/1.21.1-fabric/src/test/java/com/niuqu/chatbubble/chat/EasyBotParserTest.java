@@ -99,6 +99,41 @@ class EasyBotParserTest {
         assertNull(EasyBotParser.tryParse(line, line.getString()));
     }
 
+    // ---- system prompts must not be claimed by the colon shape (latest (5).log) ----
+
+    @Test void rejectsSystemDomainLabelWithCommandContent() {
+        // AuthMe prompt: the label is "[玩家系统]", not the exact word "系统".
+        Text line = Text.literal("[玩家系统] 请使用以下命令登录: /log <密码>");
+        assertNull(EasyBotParser.tryParse(line, line.getString()));
+    }
+
+    @Test void rejectsOtherSystemDomainLabels() {
+        Text line = Text.literal("[任务系统] 每日任务：去挖矿");
+        assertNull(EasyBotParser.tryParse(line, line.getString()));
+    }
+
+    @Test void rejectsColonRelayWithCommandContent() {
+        // A relay shape whose content is a command is command output, not chat.
+        Text line = Text.literal("[QQ群消息] 夏九：/help");
+        assertNull(EasyBotParser.tryParse(line, line.getString()));
+    }
+
+    @Test void parsesChineseNickColonRelay() {
+        Text line = Text.literal("[QQ群消息] 夏九：在下载缺失mod");
+        ChatMessageStore.SenderMeta meta = EasyBotParser.tryParse(line, line.getString());
+        assertNotNull(meta);
+        assertEquals("夏九", meta.senderName().getString());
+        assertEquals("在下载缺失mod", meta.rawContent().getString());
+    }
+
+    @Test void angleShapeStaysClaimableUnderSystemLabelWithQqId() {
+        // The colon gate must not leak into the angle shape's existing rules.
+        Text line = Text.literal("[系统] <小明(123456789)> 你好");
+        ChatMessageStore.SenderMeta meta = EasyBotParser.tryParse(line, line.getString());
+        assertNotNull(meta);
+        assertEquals("小明", meta.senderName().getString());
+    }
+
     @Test void rejectsPlainSystemText() {
         Text line = Text.literal("服务器重启完成");
         assertNull(EasyBotParser.tryParse(line, line.getString()));

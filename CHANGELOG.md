@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased / 未发布
+
+**修复：系统消息被 EasyBot 冒号形态误认成玩家气泡（三端）**
+- 根因：冒号形态 `[label] 昵称：内容` 只对 label 做精确词匹配，`[玩家系统] 请使用以下命令登录: /log <密码>` 的 label 是「玩家系统」而不是「系统」，于是被冒领成 `name=请使用以下命令登录` 的气泡（现场证据 `latest (5).log`）
+- 修复：冒号形态新增两道闸门——label 含系统词（系统/公告/服务器/广播/提示/通知 等，或结尾为 插件/助手）不认领；内容以 `/` 开头不认领。角度括号形态（有 `<>`/QQ 号结构信号）行为不变
+- 测试：三端 `EasyBotParserTest` 增补现场行与回归用例
+
+**修复：空 sender 的 chat/disguised 包不再被认领成无名气泡（三端，健壮性）**
+- `ChatClassifier` 的 `chat.type.text` 与私聊 incoming 分支对空 sender 落空；三端 `onDisguisedChat` 的 `hasSender` 增加非空判断；`ChatPipeline` 增加空 display 保险
+
+**改进：名字前分隔符守卫不再误伤括号内装饰；模板层接入 disguised 通道（三端）**
+- `MessagePresentation` 只拒绝平衡括号外的裸分隔符：`[Lv.10|VIP] Steve: hello`、`【Lv.10|VIP】Steve » hello`、`[世界] [Lv.10|VIP] Steve: hello` 恢复归属；`系统>>Steve`、`VIP|Steve`、`[系统|公告]Steve` 等广播仿冒保持拒绝
+- disguised（无 sender）通道也尝试服务端精确模板，模板日志按来源打标签（`System(template)` / `Disguised(template)`）
+- 测试：`MessagePresentationTest`、`TemplateMatcherTest` 增补矩阵用例
+
+### English
+
+**Fixed: EasyBot colon shape no longer claims system prompts as player bubbles (all platforms)**
+- Root cause: the colon relay shape only exact-matched broadcast labels, so `[玩家系统] 请使用以下命令登录: /log <密码>` was claimed as a bubble whose sender was `请使用以下命令登录` (evidence: `latest (5).log`)
+- Fix: the colon shape now rejects system-domain labels (containing 系统/公告/服务器/… or ending in 插件/助手) and `/`-prefixed command content; the angle-bracket shape keeps its existing rules
+- Tests: new `EasyBotParserTest` cases on all three platforms
+
+**Fixed: blank senders are never claimed (all platforms, robustness)**
+- `ChatClassifier` chat/whisper paths, `onDisguisedChat` `hasSender`, and `ChatPipeline` now reject blank sender names
+
+**Improved: separator guard ignores balanced-bracket decorations; templates apply to disguised lines (all platforms)**
+- `MessagePresentation` only rejects bare separators outside balanced brackets: rank decorations such as `[Lv.10|VIP] Steve: hello` parse again, while `系统>>Steve`, `VIP|Steve` and `[系统|公告]Steve` stay rejected
+- Senderless disguised lines now try server-declared templates; template logs carry a channel tag
+
 ## v2.4.13
 
 **本版为全量代码审计（7 域并行 + 逐项复核）后的修复版：P0=0，P1×7、P2×20 全部修复，附测试补齐与守卫加固。**

@@ -69,9 +69,7 @@ public final class MessagePresentation {
         // label like "系统>>Steve" — real chat keeps only decorations ([VIP],
         // <clan>, §codes, title text) before the name, never chat separators.
         String beforeName = ct.substring(0, idx);
-        if (beforeName.indexOf('>') >= 0 || beforeName.indexOf('»') >= 0
-            || beforeName.indexOf('|') >= 0 || beforeName.indexOf(':') >= 0
-            || beforeName.indexOf('：') >= 0) return Optional.empty();
+        if (hasBareChatSeparator(beforeName)) return Optional.empty();
         // Broadcast label words (系统/公告/Server/...) before the name — bracket
         // wrapped or space separated — are labels too, not a player line
         if (isBroadcastLabelPrefix(ct, idx)) return Optional.empty();
@@ -239,6 +237,41 @@ public final class MessagePresentation {
     private static final java.util.Set<String> BROADCAST_LABELS = java.util.Set.of(
         "系统", "公告", "服务器", "广播", "提示", "通知",
         "system", "server", "notice", "broadcast", "announcement", "alert");
+
+    /**
+     * True when text carries a chat separator outside any balanced decoration
+     * bracket pair. Separators inside [], (), &lt;&gt; or 【】 are rank/title
+     * content ("[Lv.10|VIP] Steve"), while a broadcast label token inside a
+     * bracket ("[系统|公告]Steve") still counts as a spoof. Bare separators
+     * before the name ("系统&gt;&gt;Steve", "VIP|Steve") keep the old rejection,
+     * and an unbalanced opener ("&lt;Steve&gt;" seen as just "&lt;") is name
+     * wrapping, not a separator.
+     */
+    private static boolean hasBareChatSeparator(String text) {
+        int i = 0, n = text.length();
+        while (i < n) {
+            char c = text.charAt(i);
+            if (c == '§' && i + 1 < n) { i += 2; continue; }
+            if (Character.isWhitespace(c)) { i++; continue; }
+            if (c == '[' || c == '(' || c == '<' || c == '【') {
+                char close = c == '[' ? ']' : c == '(' ? ')' : c == '<' ? '>' : '】';
+                int j = text.indexOf(close, i + 1);
+                if (j > i) {
+                    String inner = text.substring(i + 1, j);
+                    for (String token : inner.split("[|:：>»]")) {
+                        if (!token.isBlank()
+                            && BROADCAST_LABELS.contains(token.trim().toLowerCase(java.util.Locale.ROOT)))
+                            return true;
+                    }
+                    i = j + 1;
+                    continue;
+                }
+            }
+            if (c == '>' || c == '»' || c == '|' || c == ':' || c == '：') return true;
+            i++;
+        }
+        return false;
+    }
 
     static boolean isBroadcastLabelPrefix(String cleanText, int nameIdx) {
         String zone = cleanText.substring(0, nameIdx).trim();

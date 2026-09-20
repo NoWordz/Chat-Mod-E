@@ -210,7 +210,8 @@ public class ChatListenerMixin {
             || msgStr.startsWith("xaero_waypoint_add:")) {
             return;
         }
-        boolean hasSender = bound.name() != null;
+        boolean hasSender = bound.name() != null
+            && !bound.name().getString().replaceAll("§.", "").trim().isEmpty();
 
         boolean isWhisper = false;
         boolean isOutgoing = false;
@@ -254,6 +255,15 @@ public class ChatListenerMixin {
                 isWhisper, whisperPartner
             ));
             return;
+        }
+
+        // P1: a server-declared template is exact evidence, so it may claim a
+        // senderless disguised line (the hasSender branch above is authoritative).
+        if (!isOutgoing
+            && (!ChatMessageStore.serverChatTemplates().isEmpty()
+                || !ChatMessageStore.serverWhisperTemplates().isEmpty())) {
+            SenderMeta tpl = com.niuqu.chatbubble.chat.capture.TemplateLayer.matchByTemplate(message, msgStr, "Disguised");
+            if (tpl != null) { ChatMessageStore.setPendingMeta(tpl); return; }
         }
 
         // bound.name() empty: try tell-click first (structural), then text parsing

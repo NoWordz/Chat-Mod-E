@@ -97,6 +97,12 @@ public final class ChatClassifier {
             Text name = argAsComponent(args[0]);
             Text content = argAsComponent(args[1]);
             String displayName = name.getString().replaceAll("§.", "").trim();
+            if (displayName.isEmpty()) {
+                // P0-B: a blank sender must never become an empty-name bubble.
+                ChatMessageStore.debugLog(() -> "[e33chat] Key(whisper in blank sender) -> fallthrough | content='"
+                    + content.getString() + "'");
+                return false;
+            }
             var info = resolveOnlinePlayer(displayName);
             String profile = info != null ? info.getProfile().getName() : displayName;
             UUID uuid = info != null ? info.getProfile().getId() : new UUID(0, 0);
@@ -140,6 +146,12 @@ public final class ChatClassifier {
                 return true;
             }
             String displayName = name.getString().replaceAll("§.", "").trim();
+            if (displayName.isEmpty()) {
+                // P0-B: fall through to the system pipeline instead of claiming.
+                ChatMessageStore.debugLog(() -> "[e33chat] Key(chat blank sender) -> fallthrough | content='"
+                    + contentStr + "'");
+                return false;
+            }
             var info = resolveOnlinePlayer(displayName);
             String profile;
             UUID uuid;

@@ -192,7 +192,8 @@ public class ChatListenerMixin {
             || msgStr.startsWith("xaero_waypoint_add:")) {
             return;
         }
-        boolean hasSender = params.name() != null;
+        boolean hasSender = params.name() != null
+            && !params.name().getString().replaceAll("§.", "").trim().isEmpty();
 
         boolean isWhisper = false;
         boolean isOutgoing = false;
@@ -227,6 +228,15 @@ public class ChatListenerMixin {
                 new UUID(0, 0), disSender, disContent, false,
                 params.name().getString(), isWhisper, whisperPartner));
             return;
+        }
+
+        // P1: a server-declared template is exact evidence, so it may claim a
+        // senderless disguised line (the hasSender branch above is authoritative).
+        if (!isOutgoing
+            && (!ChatMessageStore.serverChatTemplates().isEmpty()
+                || !ChatMessageStore.serverWhisperTemplates().isEmpty())) {
+            SenderMeta tpl = com.niuqu.chatbubble.chat.capture.TemplateLayer.matchByTemplate(message, msgStr, "Disguised");
+            if (tpl != null) { ChatMessageStore.setPendingMeta(tpl); return; }
         }
 
         var connection = MinecraftClient.getInstance().player != null
