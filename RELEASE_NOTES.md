@@ -4,6 +4,14 @@
 用「新增 / 修复 / 更改」等常规分类组织，写法自由，不要拿语言名当标题。
 仓库 GitHub Release 正文取整段；Modrinth / CurseForge 的 changelog 取段尾英文块（英文内部不要空行）。
 
+## v2.4.14
+
+修复：服务端系统提示不再被误认成玩家消息——EasyBot 冒号形态（`[标签] 昵称：内容`）此前只对标签做精确匹配，`[玩家系统] 请使用以下命令登录: /log <密码>` 被当成名为「请使用以下命令登录」的玩家气泡；现在系统系标签（含 系统/公告/服务器/广播/提示/通知 等词，或结尾为 插件/助手）与 `/` 开头的命令内容一律不认领，角度括号形态行为不变。空 sender 的 chat/disguised 包也不再被认领成无名气泡。名字前的分隔符守卫不再误伤括号内装饰：`[Lv.10|VIP] Steve: hello`、`【Lv.10|VIP】Steve » hello`、`[世界] [Lv.10|VIP] Steve: hello` 恢复正常归属，`系统>>Steve`、`VIP|Steve`、`[系统|公告]Steve` 等广播仿冒保持拒绝。
+
+改进：服务端精确模板也接入无 sender 的 disguised 通道，命中即归属；模板日志按来源打 `System(template)` 或 `Disguised(template)` 标签，排查时一眼能看出消息走的哪条通道。
+
+Fixed: server system prompts are no longer claimed as player messages. The EasyBot colon shape (`[label] nick: content`) only exact-matched its label, so `[玩家系统] 请使用以下命令登录: /log <密码>` became a bubble sent by 「请使用以下命令登录」; system-domain labels (containing 系统/公告/服务器/广播/提示/通知 or ending in 插件/助手) and `/`-prefixed command content are now rejected, while the angle-bracket shape is unchanged. Blank-sender chat and disguised packets are no longer claimed as nameless bubbles either, and the pre-name separator guard no longer misfires on separators inside balanced decorations: `[Lv.10|VIP] Steve: hello`, `【Lv.10|VIP】Steve » hello` and `[世界] [Lv.10|VIP] Steve: hello` parse again, while `系统>>Steve`, `VIP|Steve` and `[系统|公告]Steve` stay rejected. Server-declared exact templates now also apply to senderless disguised lines, and template logs carry a System/Disguised source tag.
+
 ## v2.4.13
 
 全量代码审计后的加固版本（P0 级问题为零，修复覆盖全部 P1/P2）。
