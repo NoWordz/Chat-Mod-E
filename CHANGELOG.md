@@ -1,99 +1,142 @@
 # Changelog
 
+<!--
+写法约定（改本文件前先读）：
+
+1. 【一版一段】段标题必须是 `## vX.Y.Z`（带 v），与 git tag 一致。一个版本号只出现一次 ——
+   同版本多次交付在段内写 `**修复（2.3.7 补发 9）**` 这类副标题，不要另起一个 `## vX`
+   （重复段标题会让"取哪一段"变成掷骰子）。
+2. 【副标题是加粗，不是 `###`】`###` 与 `>` 都不做副标题。副标题可以是分类名
+   （新增 / 修复 / 更改 / 性能 / 配置 / 说明），也可以是一句主题（`**修复：图标改为每帧现渲**`）。
+   `>` 只用于段标题正下方的版本级说明。
+3. 【正文一律 `- ` 列表】一条一事。只有「说明」类副标题下允许短段落。
+4. 【中文在前、英文在段尾，中间恰好一行 `----`】切分靠分隔线、不靠空行（英文块内部允许空行）。
+   —— 按空行切是曾经的真实 bug：英文块自己分段后只会取到最后一段。本节若只有中文，不写分隔线。
+5. 【不要拿语言名当标题】不写 `### English` / `### 英文` —— 段尾那块本来就是英文。
+6. 【本文件是仓库长账】写根因、实现、产物指纹、测试数；面向玩家的浓缩摘要写在
+   `RELEASE_NOTES.md`。两处说法可以不同，但不能互相矛盾。
+7. 【机器契约】各平台 `build.gradle` 的 `changelogFor()` 按 `----` 分隔线切英文块 ——
+   改版式必须同步改它（旧写法 `lastIndexOf('\n\n')` 会静默丢掉前面的英文小节）。
+
+格式规范正本见 skill `changelog-format`。
+-->
+
 ## v2.4.14
 
 **修复：系统消息被 EasyBot 冒号形态误认成玩家气泡（三端）**
+
 - 根因：冒号形态 `[label] 昵称：内容` 只对 label 做精确词匹配，`[玩家系统] 请使用以下命令登录: /log <密码>` 的 label 是「玩家系统」而不是「系统」，于是被冒领成 `name=请使用以下命令登录` 的气泡（现场证据 `latest (5).log`）
 - 修复：冒号形态新增两道闸门——label 含系统词（系统/公告/服务器/广播/提示/通知 等，或结尾为 插件/助手）不认领；内容以 `/` 开头不认领。角度括号形态（有 `<>`/QQ 号结构信号）行为不变
 - 测试：三端 `EasyBotParserTest` 增补现场行与回归用例
 
 **修复：空 sender 的 chat/disguised 包不再被认领成无名气泡（三端，健壮性）**
+
 - `ChatClassifier` 的 `chat.type.text` 与私聊 incoming 分支对空 sender 落空；三端 `onDisguisedChat` 的 `hasSender` 增加非空判断；`ChatPipeline` 增加空 display 保险
 
 **改进：名字前分隔符守卫不再误伤括号内装饰；模板层接入 disguised 通道（三端）**
+
 - `MessagePresentation` 只拒绝平衡括号外的裸分隔符：`[Lv.10|VIP] Steve: hello`、`【Lv.10|VIP】Steve » hello`、`[世界] [Lv.10|VIP] Steve: hello` 恢复归属；`系统>>Steve`、`VIP|Steve`、`[系统|公告]Steve` 等广播仿冒保持拒绝
 - disguised（无 sender）通道也尝试服务端精确模板，模板日志按来源打标签（`System(template)` / `Disguised(template)`）
 - 测试：`MessagePresentationTest`、`TemplateMatcherTest` 增补矩阵用例
 
-### English
+----
 
 **Fixed: EasyBot colon shape no longer claims system prompts as player bubbles (all platforms)**
+
 - Root cause: the colon relay shape only exact-matched broadcast labels, so `[玩家系统] 请使用以下命令登录: /log <密码>` was claimed as a bubble whose sender was `请使用以下命令登录` (evidence: `latest (5).log`)
 - Fix: the colon shape now rejects system-domain labels (containing 系统/公告/服务器/… or ending in 插件/助手) and `/`-prefixed command content; the angle-bracket shape keeps its existing rules
 - Tests: new `EasyBotParserTest` cases on all three platforms
 
 **Fixed: blank senders are never claimed (all platforms, robustness)**
+
 - `ChatClassifier` chat/whisper paths, `onDisguisedChat` `hasSender`, and `ChatPipeline` now reject blank sender names
 
 **Improved: separator guard ignores balanced-bracket decorations; templates apply to disguised lines (all platforms)**
+
 - `MessagePresentation` only rejects bare separators outside balanced brackets: rank decorations such as `[Lv.10|VIP] Steve: hello` parse again, while `系统>>Steve`, `VIP|Steve` and `[系统|公告]Steve` stay rejected
 - Senderless disguised lines now try server-declared templates; template logs carry a channel tag
+- Tests: new matrix cases in `MessagePresentationTest` and `TemplateMatcherTest`
 
 ## v2.4.13
 
 **本版为全量代码审计（7 域并行 + 逐项复核）后的修复版：P0=0，P1×7、P2×20 全部修复，附测试补齐与守卫加固。**
 
 **修复：恶意数据包可让对端无限分配内存（P1，5 处路径）**
+
 - 根因：网络解码普遍是「读计数 → new ArrayList<>(count)」家族，计数来自网络且不设上限——`ChatMetaPacket`（Forge 手写）、`ConfigSyncV2Payload`（Neo/Fabric 手写）、`ServerConfigDto`（三端；1.20.1 原版 `readCollection` 经反编译核实预分配同样无上限）、`MediaClient` 的 `new byte[totalChunks()][]`（三端）。恶意服务器一包打崩客户端、恶意客户端一包打崩服务器
 - 修复：列表计数钳 200/256（条目数本就只有个位数量级）、chunk 数经共享的 `DiskMediaStore.isValidChunkCount` 校验、重组体交付前校验 ≤8MB；超出范围的媒体串/块长度**直接抛出拒收整包**（此前 Neo 的做法是钳制后继续读，残留字节使后续字段整体错位）
 - 顺带修复 NeoForge 媒体串写读不对称：写的是字符数、读的是字节数——错误文案一旦非 ASCII 即整体错位（当前恒 ASCII，属潜伏雷）
 
 **修复：NeoForge 端连发服务器中转 JPEG 双倍消耗下载额度（P1）**
+
 - 根因：2.4.12 给 `animatedEntry` 加的「jpg/jpeg/bmp 不做内容探测」短路只落在 Forge 与 Fabric，Neo 端漏掉——每张服务器中转的 jpg 每次进渲染路径都白发一次探测下载，正是 2.4.12「发图人自己的图最先失败」病灶的残留
 - 修复：短路与注释原样移植；与 2.4.11 的教训互为镜像——**修复必须以协议/逻辑为单位改三端，不以「出事的端」为单位**
 
 **修复：Fabric 切换主题永久丢失面板背景图与取景（P1 数据丢失）**
+
 - 根因：`ChatBubbleConfig.withTheme` 的尾三参硬编码 `("", 100, null)`，把背景图/不透明度/取景一并清空；聊天内设置菜单切主题会立即落盘，重启也回不来
 - 修复：改为透传；新增 `ChatBubbleConfigWithMethodsTest` 用反射断言「每个 with* 只改自己的字段」——这个 bug 正是缺这条测试的直接代价
 
 **修复：Fabric `/e33chat template` 保存后悄悄关闭服务器托管图片（P1）**
+
 - 根因：命令落盘时 `new ServerConfig()` 只填 5 个字段；`media_enabled` 是原始类型 boolean，未赋值即 false 被 Gson 写进文件（其余包装类型 null 被省略、读回回退默认，唯独它被毒化）——改过一次常用语，重启后媒体直传静默失效
 - 修复：照 GUI 保存链从现值补齐全部 12 个字段
 
 **修复：群目录超过 200 个时数据错位（P1）**
+
 - 根因：Forge 对 counts 前置钳 200、Neo 对三个列表全部前置钳 200——多出的条目字节留在缓冲区，后续字段从残留字节开始解析，错位或整包丢弃；`group_max_count` 合法范围是 1–500，配到 201+ 即触发
 - 修复：三端统一为 Fabric 的「全读后截断」（预分配另有 1024 上限防恶意计数）
 
 **修复：动图纹理永久占用显存（P1 泄漏）**
+
 - 根因：`AnimatedImageLoader` 的缓存无上限无淘汰，每帧一张 `DynamicTexture` 注册后从不释放；断线钩子也不清理。对照静态图加载器本就有 64 条 LRU + 释放的先例
 - 修复：缓存改为访问序 LRU（24 条 / 192 帧双上限），逐出与断线 `resetAll` 时释放纹理；generic 解码失败路径补 `closeFrames`（此前只有 GIF 路径有）；`resetAll` 与仍在途的解码任务竞态已堵（先标记 retired，迟到的注册就地释放）
 - 附：侧栏背景/分隔线高度硬编码 999 改为真实屏幕高——GUI 高度超过 999（1080p+ @ 缩放 1）时下半截直接消失透出世界
 
 **修复：清空历史两击确认永不过期（P2 时钟错位）**
+
 - 根因：武装时存 `System.currentTimeMillis()`（epoch），过期检查收到的却是游戏单调钟——差值恒为巨负，1 秒窗口永不失效，隔多久再点都直接清空
 - 修复：`handleClick` 增加与 tick 同源的 `now` 参数，武装与确认在同一时钟域比对；`beginPopupClose` 修过的同类坑至此有三处沉淀（统一 UiClock 的门面方案留在下一波）
 
 **修复：弹层关闭后立刻重开被旧计时器误关（P2）**
+
 - 根因：重开路径只置 `visible = true` 不清 `closeStart`，150ms 窗口内 tick 的 `finishPopupClose` 到期把刚重开的弹层连同输入框一起隐藏。群组弹层 2.4.11 修过并留了注释，搜索/常用语两处没照做
 - 修复：重开处统一清零，对齐群组弹层写法
 
 **修复：横幅头像淡入比文字更暗（P2 alpha 平方）**
+
 - 根因：`setShaderColor` 包住 `drawPlayerHead`，而后者已按顶点色乘 alpha——动画窗口内头像实际是 alpha²
 - 修复：删掉包裹（与 Fabric 对齐）；这是「setShaderColor 对 blit 无效」史实坑的进化残留——对带色路径它不是无效，是双重生效
 
 **修复：表情面板右侧空白点击误发（P2）**
+
 - 根因：命中用整数除法算列号且不钳上界，GUI 缩放压缩面板后右侧 padding 带整除成「下一行第 0 列」——点空白发错表情/图片
 - 修复：列号钳制抽成可测的 `gridColumn`；滚动高度改用真实面板宽度推导（此前固定 5/9 列，窄面板滚不到底）
 
 **加固：群组数据与服务端配置的持久化（P2）**
+
 - 群组 JSON 改为写临时文件 + 原子 move；保存失败时**向玩家回报**而不是照常回「已创建」；损坏文件保留 `.broken-<时间戳>` 备份而不是被空内存态覆盖（此前的失败链：截断 → 加载为空 → 下次保存清零全服群组）
 - Fabric `ServerConfigManager` 同步补齐：保存失败记日志（原来静默吞）、损坏文件备份、原子写
 - Fabric GUI 保存后补发群组目录广播（Forge/Neo 本有）；`sendGroupList` 补 ensureLoaded（JOIN 早于握手时不再发空目录）；Forge/Neo 的 `bad_name`/`exists` 报错补上格式参数（此前玩家看到裸 %s）
 
 **加固：单机切换世界的残留（P2）**
+
 - Fabric `configLoaded` 停服时复位——同一客户端会话进第二个世界不再沿用第一个世界的服务端配置
 - 三端 `pendingQuotes`/`historyBuffer` 停服清空——A 档的历史不再作为「聊天记录」下发给 B 档、残留引用不再错误附着
 
 **修复：带频道前缀的普通聊天丢失样式（P2，行为面）**
+
 - 根因：EasyBot 冒号形状（`[标签] 名字：内容`）为反棘轮不做让位，但认领后名字退化为纯文本字面量，`[世界] Steve` 的频道/称号/颜色前缀全丢——`easy_bot_compat` 默认开启放大了此面
 - 修复：命中**在线真实玩家**时改用原行重建带样式显示名（不让位的反棘轮语义保留）；真 QQ 转发不受影响
 - 附：`isTemplateNameKnown` 的 `contains()` 守卫改词边界匹配（转发正文提到自己名字不再被当已知玩家）；`seenPlayers` 断线清空（跨服昵称残影不再污染归因）
 
 **修复：侧栏通配符屏蔽从未生效 / Fabric 含括号规则崩溃（P2）**
+
 - 根因：Forge/Neo 先 `Pattern.quote` 再替换 `*`——引号产物里 `*` 前没有反斜杠，替换永不命中，`Islot_*` 只匹配字面量（tooltip 承诺的通配从未兑现）；Fabric 反向裸拼用户文本进正则，`[`/`(` 直接抛 `PatternSyntaxException`
 - 修复：三端统一委托共享层 `WildcardPatterns`（字面量段引号 + 通配符段拼接），附 7 例单测钉住语法
 
 **开发与守卫**
+
 - `TemplateMatcher`（模板解析，「最强证据」层）与测试从三份手抄收编进 `shared/`；`MessagePresentation` 热路径两枚 Pattern 静态化（每条聊天线原需重复编译）
 - 钉等清单 10 → 18 条：审计里 Neo 漏修高发的 `EasyBotParser`/`AnimatedImageLoader`/`UploadQueue`/`GroupBrowserPanel` 及 4 份测试纳入 Forge↔Neo 钉等；`verify_targets.py` 支持 `{path, platforms}` 平台限定条目（Fabric Yarn 孪生内容本就不同）
 - 新增 6 个测试类：`PacketDecodeBoundsTest`（三端，恶意长度前缀不得无界分配、越界拒收而非静默钳制）、`GroupManagerValidationTest`（三端，注释声称 unit-tested 实为零测试的纯函数）、`ChatEmojiPanelGridTest`（三端）、`SidebarHidePatternTest`（三端，Forge/Neo 经新增 `sidebarHidePatternsSupplier` 测试缝）、`WildcardPatternsTest`（共享）、`DiskMediaStoreTest` 扩 chunk 上限用例
@@ -101,27 +144,118 @@
 
 **不修与登记**：协议版本号恒 "1" 未 bump（2.4.13 无 wire 字段变更，bump 会误拒兼容的 2.4.10–2.4.12 对端；策略已写入注释，下次 wire 变更升 "2"）；恶意输入类不提供实机用例（自动化已钉）；issue #8 补全点击埋点与药水 HUD 泄漏仍等实机日志。
 
+----
+
+**A fix release after a full-code audit (7 domains in parallel + item-by-item review): zero P0s, all 7 P1s and 20 P2s closed, with tests filled in and guards hardened.**
+
+**Fixed: hostile packets can no longer make the peer allocate without bound (P1, 5 paths)**
+
+- Root cause: network decoding is broadly the "read a count -> new ArrayList<>(count)" family, and that count comes off the wire with no cap — `ChatMetaPacket` (hand-written on Forge), `ConfigSyncV2Payload` (hand-written on Neo/Fabric), `ServerConfigDto` (all three; decompilation confirmed the vanilla 1.20.1 `readCollection` preallocates with no cap either) and `MediaClient`'s `new byte[totalChunks()][]` (all three). One packet from a hostile server took the client down; one from a hostile client took the server down
+- Fix: list counts are clamped to 200/256 (the real entry counts are single-digit anyway), the chunk count goes through the shared `DiskMediaStore.isValidChunkCount`, and a reassembled body is checked against ≤8MB before delivery; an out-of-range media string or block length now **throws and rejects the whole packet** (Neo used to clamp and keep reading, and the leftover bytes shifted every later field)
+- Along the way, NeoForge's media-string write/read asymmetry was fixed: it writes a character count and reads a byte count, so an error message would shift everything the moment it is non-ASCII (currently always ASCII — a latent landmine)
+
+**Fixed: NeoForge burned double the download quota on consecutive server-hosted JPEGs (P1)**
+
+- Root cause: the "no content probe for jpg/jpeg/bmp" short-circuit that 2.4.12 added to `animatedEntry` only landed on Forge and Fabric and was missed on Neo — every server-hosted jpg fired a wasted probe download on every trip through the render path, exactly the residue of the 2.4.12 "the sender's own image fails first" symptom
+- Fix: the short-circuit and its comment were ported verbatim; this mirrors the 2.4.11 lesson — **a fix must be applied per protocol/logic across all three platforms, not per "the platform that broke"**
+
+**Fixed: switching themes on Fabric permanently lost the panel background image and its crop (P1, data loss)**
+
+- Root cause: the last three parameters of `ChatBubbleConfig.withTheme` were hardcoded to `("", 100, null)`, clearing the background image, opacity and crop together; switching themes from the in-chat settings menu saves immediately, so a restart could not bring them back
+- Fix: they now pass through; the new `ChatBubbleConfigWithMethodsTest` uses reflection to assert that "every with* changes only its own field" — this bug was the direct cost of that test being missing
+
+**Fixed: Fabric's `/e33chat template` silently turned off server media hosting after saving (P1)**
+
+- Root cause: the command's save path filled only 5 fields of `new ServerConfig()`; `media_enabled` is a primitive boolean, so unset meant false and Gson wrote it to the file (the other boxed types were omitted as null and fell back to their defaults on read — only this one was poisoned) — edit a quick phrase once and, after a restart, media pass-through was silently dead
+- Fix: all 12 fields are now filled from the current values, following the GUI save chain
+
+**Fixed: the group directory desynced above 200 groups (P1)**
+
+- Root cause: Forge pre-clamped counts to 200 and Neo pre-clamped all three lists to 200 — the surplus entry bytes stayed in the buffer and the later fields were parsed from the leftovers, desyncing or dropping the packet; the legal range of `group_max_count` is 1–500, so 201+ triggered it
+- Fix: all three platforms now use Fabric's "read fully, then truncate" (preallocation carries a separate 1024 cap against hostile counts)
+
+**Fixed: animated textures occupied VRAM forever (P1, leak)**
+
+- Root cause: `AnimatedImageLoader`'s cache had no cap and no eviction, and each frame's `DynamicTexture` was registered and never released; the disconnect hook did not clean up either. The static image loader had already set the precedent with a 64-entry LRU plus release
+- Fix: the cache is now an access-ordered LRU (dual caps of 24 entries / 192 frames), and textures are released on eviction and on the disconnect `resetAll`; the generic decode-failure path gained `closeFrames` (only the GIF path had it); the race between `resetAll` and in-flight decode tasks is plugged (mark retired first, release a late registration on the spot)
+- Also: the sidebar background/divider height was hardcoded to 999 and now uses the real screen height — above a GUI height of 999 (1080p+ at GUI scale 1) the lower half simply vanished and showed the world through
+
+**Fixed: the clear-history two-click confirm never expired (P2, clock-domain mixup)**
+
+- Root cause: arming stored `System.currentTimeMillis()` (epoch) while the expiry check received the game's monotonic clock — the difference was always hugely negative, so the 1-second window never expired and a second click minutes later still cleared everything
+- Fix: `handleClick` takes a `now` parameter sourced from the same clock as the tick, so arming and confirming compare inside one clock domain; this is the third instance of the same pitfall that `beginPopupClose` already fixed (a unified UiClock facade is parked for the next wave)
+
+**Fixed: a popup reopened right after closing was killed by the stale timer (P2)**
+
+- Root cause: the reopen path set `visible = true` without clearing `closeStart`, so within the 150ms window the tick's `finishPopupClose` fired and hid the just-reopened popup along with its input box. The group popup had this fixed in 2.4.11 with a comment, but search and quick-phrases did not follow suit
+- Fix: every reopen now clears it, matching the group popup
+
+**Fixed: banner avatars faded in darker than their text (P2, alpha squared)**
+
+- Root cause: `setShaderColor` wrapped `drawPlayerHead`, which already multiplies alpha through the vertex colour — so during the animation window the avatar was effectively alpha²
+- Fix: the wrapper is gone (matching Fabric); this is the evolved residue of the "setShaderColor does nothing for blit" pitfall — on a colour-carrying path it is not ineffective, it applies twice
+
+**Fixed: clicks in the emote panel's right-hand padding sent the wrong emote (P2)**
+
+- Root cause: hit testing computed the column by integer division without clamping the upper bound, so once GUI scaling compressed the panel the right-hand padding band divided down to "next row, column 0" — clicking blank space sent the wrong emote or image
+- Fix: the column clamp is extracted into a testable `gridColumn`, and the scroll height is derived from the real panel width (it used to assume a fixed 5/9 columns, so a narrow panel could not scroll to the bottom)
+
+**Hardened: persistence of group data and server config (P2)**
+
+- Group JSON is written to a temp file and atomically moved; a failed save is **reported to the player** instead of still answering "created"; a corrupt file is kept as a `.broken-<timestamp>` backup rather than overwritten by the empty in-memory state (the old failure chain: truncate -> load empty -> the next save wipes every group on the server)
+- Fabric's `ServerConfigManager` caught up: failed saves are logged (they used to be swallowed silently), corrupt files are backed up, writes are atomic
+- Fabric now re-broadcasts the group directory after a GUI save (Forge/Neo already did); `sendGroupList` calls ensureLoaded (a JOIN arriving before the handshake no longer sends an empty directory); the Forge/Neo `bad_name`/`exists` errors got their format arguments (players used to see a bare %s)
+
+**Hardened: leftovers when switching worlds in singleplayer (P2)**
+
+- Fabric's `configLoaded` resets when the server stops — a second world in the same client session no longer inherits the first world's server config
+- `pendingQuotes`/`historyBuffer` are cleared on all three platforms when the server stops — save A's history is no longer handed to save B as "chat history", and leftover quotes no longer attach to the wrong message
+
+**Fixed: ordinary chat carrying a channel prefix lost its styling (P2, behavioural)**
+
+- Root cause: the EasyBot colon shape (`[label] name: content`) does not yield, to preserve the anti-ratchet, but once it claims a line the name degrades to a plain literal and the channel/title/colour prefix of `[世界] Steve` is lost entirely — `easy_bot_compat` being on by default widened that surface
+- Fix: when the name matches an **online real player**, the styled display name is rebuilt from the original line (the no-yield anti-ratchet semantics are kept); genuine QQ relays are unaffected
+- Also: the `contains()` guard in `isTemplateNameKnown` now matches on word boundaries (your own name mentioned in a relay's body is no longer treated as a known player), and `seenPlayers` is cleared on disconnect (a nickname ghost from another server no longer pollutes attribution)
+
+**Fixed: sidebar wildcard hiding never worked / bracket rules crashed Fabric (P2)**
+
+- Root cause: Forge/Neo called `Pattern.quote` first and then replaced `*` — in the quoted output the `*` has no backslash in front of it, so the replacement never matched and `Islot_*` only matched the literal string (the wildcard the tooltip promised never worked); Fabric went the other way and pasted raw user text into a regex, so `[`/`(` threw `PatternSyntaxException` outright
+- Fix: all three delegate to a shared `WildcardPatterns` (quote the literal segments, concatenate the wildcard segments), with 7 unit tests pinning the grammar
+
+**Development and guards**
+
+- `TemplateMatcher` (template parsing, the "strongest evidence" layer) and its tests were consolidated out of three hand-copied versions into `shared/`; the two Patterns on `MessagePresentation`'s hot path are now static (every chat line used to recompile them)
+- The pinned-equality list grew from 10 to 18 entries: `EasyBotParser`/`AnimatedImageLoader`/`UploadQueue`/`GroupBrowserPanel` — where the audit found Neo most often missed a fix — plus 4 test files are now pinned Forge↔Neo; `verify_targets.py` accepts `{path, platforms}` platform-scoped entries (Fabric's Yarn twins genuinely differ)
+- Six new test classes: `PacketDecodeBoundsTest` (all three — a hostile length prefix must not allocate unboundedly, and out-of-range input must be rejected rather than silently clamped), `GroupManagerValidationTest` (all three — pure functions whose comments claimed unit tests but had none), `ChatEmojiPanelGridTest` (all three), `SidebarHidePatternTest` (all three, with a new `sidebarHidePatternsSupplier` test seam on Forge/Neo), `WildcardPatternsTest` (shared), and `DiskMediaStoreTest` extended with chunk-cap cases
+- Miscellaneous: Neo's `ChatMeta` mention list now carries an explicit 200 cap (the library list codec allows 65536), Fabric's file picker accepts `.gif`, Fabric no longer 404s on an icon for an invalid theme value, `RoundRectRenderer` saves/restores blend state on all three, 4 missing translation keys were filled in, a stale rate-limit comment was corrected, and Neo's dead constant and Forge's dead parameter were removed
+
+**Not fixed, and logged**: the protocol version stays "1" and was not bumped (2.4.13 changes no wire field, and bumping would wrongly reject compatible 2.4.10–2.4.12 peers; the policy is written into a comment and the next wire change raises it to "2"); hostile-input cases get no in-game test case (automation already pins them); issue #8's remaining click instrumentation and the potion HUD leak still wait on field logs.
+
 ## v2.4.12
 
 **修复：发出去的 GIF 不会动（2.4.10 功能的一半没兑现）**
+
 - 现象：动图在表情面板里能动，一发出去就变成静止的首帧；而别人从外部传进来的 GIF 反而是动的
 - 根因：上传管线用 `ImageIO.read` 读文件——它对动图只返回第一帧——再统一重编码成 PNG，还把这个单帧 PNG 标成 `image/png`。动画在离开客户端之前就已经被压掉了，接收端的动图解码器只能看到一帧
 - 修复：动图源改为**原字节直传**（不解码、不重编码），content-type 按真实格式给；直传前先核对接收端能否渲染（≤512px、≤48 帧、≤8MB），超出则**明确拒绝并提示**是尺寸、帧数还是体积超限，而不是静默降级成静态图——「发了但不动」正是这次要消灭的现象
 - 顺带：图片消息的 `[[CICode]]` 补上 `name=` 文件名，图床返回无扩展名 URL 时下载端也能认出是动图
 
 **修复：从系统消息里进来的 QQ 群转发全变灰字**
+
 - 现象：`[QQ群消息] 名字：内容` 这类转发被当系统消息渲染成灰字，偶尔又能正确识别成玩家消息
 - 根因：EasyBot 解析器的正则要求名字带尖括号（`<名字>`），而本服模板用的是 `[标签] 名字：内容`（无尖括号）→ 解析器直接弃权，整行掉到文本启发式的兜底层，时对时错；更糟的是兜底层重建显示名时会把标签拼进名字（`[QQ群消息] dangdang0721`），而名字匹配是「长名优先」，这个复合名一旦入缓存就会被后续所有消息优先命中，越错越深
 - 修复：解析器接受「带标签 + 冒号分隔」的形状（标签是必需的结构信号——裸的 `名字：内容` 属于普通聊天，仍交给玩家路径）。这条路径不再对已知玩家让位，因此在线玩家的转发也保留头像皮肤，同时不再污染名字缓存
 - 说明：尖括号形状的行为完全不变（含「已知玩家让位给玩家路径」那条）
 
 **修复：空输入按 Tab 后聊天框再也无法输入（1.21.1 两端）**
+
 - 现象：打开聊天框直接按 Tab，之后键入、退格全部失效，必须关掉聊天框重开
 - 根因：原版 `ChatScreen` 构造补全器后会调 `setAllowHiding(false)`（Fabric 侧是 `setCanLeave(false)`），E33Chat 漏了。缺这一句时空输入按 Tab 会让补全器的 `keyPressed` 返回 false，Tab 继续走到自实现的焦点导航，那里在「前方无控件」时会清空焦点——而输入框是 `canLoseFocus=false`，焦点清掉就再也拿不回来
 - 修复：两端补上这一句（与原版一致）；另外给焦点导航里的清空动作加守卫——输入框仍持有焦点时不再清，堵住同类损耗的另一条路径（箭头键也会走到那里）
 - 注意：1.20.1 的 `CommandSuggestions` 没有这个开关，其空输入按 Tab 本来就会打开补全列表，故 **Forge 端不受此 bug 影响**，只补了守卫
 
 **修复：打开聊天面板时物品栏 HUD 消失（2.4.9 回归的一半）**
+
 - 背景：2.4.9 为 issue #16「半透明面板透出快捷栏/药水/Jade 提示框」在打开 E33Chat 界面时隐藏整个 HUD 层；2.4.11 修掉了它连带关掉第一人称手的问题，但物品栏仍被隐藏
 - 判定：聊天面板是**左对齐的一条窄列**（默认约占屏宽 40%），物品栏在屏幕底部居中、状态效果在右上，本来就在面板之外，隐藏它们没有换来任何观感收益，却拿走了玩家看快捷栏的能力
 - 修复：**聊天面板不再隐藏 HUD**；两个配置屏（客户端/服务端，全屏半透明底）保持隐藏
@@ -129,57 +263,69 @@
 - 铁律不变：隐藏 HUD 永不使用 `options.hideGui`（那是 F1，会连带第一人称手）
 
 **新增：自定义面板背景图的取景**
+
 - 现象/需求：背景图是「等比居中裁剪」，图没变形，但没法选裁哪一块——面板又高又窄，宽图左右被切掉一大截，想露的主体常常不在中间
 - 实现：设置 → 聊天框 → 面板 的图片行改为「调整取景 / 清除」；选完图直接进取景编辑器：整图预览 + 一个**锁定面板宽高比**的选取框，框内拖动平移、滚轮缩放，确定后按此取景铺满
 - 存法：取景保存为归一化值（中心点 + 缩放）而非绝对矩形，之后改面板宽度、改窗口大小或开铺满模式都能自动适配，不会画歪；清除图片会一并清掉取景
 - 加载失败/未配置仍回退默认面板纹理
 
 **更改：自定义表情包上限 10 → 32**
+
 - 表情面板本来就可以滚动，10 张只是当初拍的数；上限提到 32，文案同步
 
 **调试：指令补全列表鼠标点不了（临时埋点，未定案）**
+
 - 现象：补全列表出现后无法用鼠标点击选择（原版可以）
 - 现状：代码上点击是有接线的，且渲染与命中判定用的是同一个矩形，静态分析读不出原因
 - 本版加入了临时诊断日志（记录点击落点、面板偏移、以及补全列表构造出的矩形），需在实机复现一次以区分「点击被更早的分支吃掉」与「绘制与命中矩形不一致」；**开启 `debug_log` 后复现一次即可定位**，修复留待下一版
 
 **修复：自己发的图片会"莫名其妙加载失败"**
+
 - 现象：连发几张图后，中间某张报加载失败；日志说 `timed out after 30s`，但耗时只有 6ms，同一个文件过一会儿又能正常加载
 - 根因（三层叠加）：
-  1. **每张图白花一次下载额度**——动图探测对 `e33chat://media/` 无条件发请求，哪怕 CICode 里已经写着 `name=1.jpg`（jpg 不可能是动图）。服务端额度是 4 次/10 秒、上传和下载共用，而每条图本身就要花掉"上传 1 次 + 自己的客户端再下载 1 次"
-  2. **NeoForge 端 2.4.11 的去重修复从未落地**——Neo 的 `fetch` 用 `FETCHES.put()` 直接覆盖，同一 mediaId 的第二个请求（探测 + 静态加载器各发一次）会把第一个的 future 顶掉，第一个只能等满 30 秒超时并报失败，而图片其实早就下好了。2.4.11 的"同 id 请求合并"只改到了 Forge
-  3. **日志说谎**——服务端对"被限流"和"文件不存在"回同一个哨兵，客户端 `catch (Exception)` 一律打成"超时 30s"，把排查引向网络
+1. **每张图白花一次下载额度**——动图探测对 `e33chat://media/` 无条件发请求，哪怕 CICode 里已经写着 `name=1.jpg`（jpg 不可能是动图）。服务端额度是 4 次/10 秒、上传和下载共用，而每条图本身就要花掉"上传 1 次 + 自己的客户端再下载 1 次"
+2. **NeoForge 端 2.4.11 的去重修复从未落地**——Neo 的 `fetch` 用 `FETCHES.put()` 直接覆盖，同一 mediaId 的第二个请求（探测 + 静态加载器各发一次）会把第一个的 future 顶掉，第一个只能等满 30 秒超时并报失败，而图片其实早就下好了。2.4.11 的"同 id 请求合并"只改到了 Forge
+3. **日志说谎**——服务端对"被限流"和"文件不存在"回同一个哨兵，客户端 `catch (Exception)` 一律打成"超时 30s"，把排查引向网络
 - 修复：①`animatedEntry` 对 `.jpg/.jpeg/.bmp` 直接短路（这些扩展名不可能动，`.png` 仍探测因为 APNG 共用扩展名）；② `MediaClient` 新增**自己上传的本地缓存**（24 条 LRU）——自己发的图直接命中内存，不花下载额度、也不可能"加载失败"；③NeoForge/Fabric 的 `fetch` 改为 `computeIfAbsent` 合并并发请求（与 Forge 对齐）；④超时与拒绝分开记录日志；⑤服务端限流 4 → 16 次/10 秒（16 仍能挡住滥用，但不再惩罚正常的连发几张）
 
 **修复：壁纸取景界面一片空白（新功能的 bug）**
+
 - 现象：选完背景图后进入取景界面，什么都没有，看不到图
 - 根因：`PanelBackground.ensureLoaded()` **只在聊天面板渲染时被调用**。配置屏和取景屏都不渲染聊天面板，所以刚选完图时纹理从未开始加载，`imageWidth()` 为 0，自然什么都画不出来
 - 修复：取景屏自己触发加载，并在加载期间每 tick 轮询尺寸、就绪后重排布局；界面在未就绪时显示「正在加载背景图…」，失败时显示**红色的具体原因**（格式不支持/文件不存在），未设置时提示"尚未设置背景图"——不再让用户对着空白界面猜
 
 **更改：动图上限对齐 AtomChat（帧数 48 → 120，并改用像素预算裁帧）**
+
 - 现象：用户 66 帧 / 72 帧的 GIF 被拒绝，而同一个文件 AtomChat 能发
 - 根因：E33Chat 的动图限制是"48 帧硬上限 + 超出直接拒绝"，AtomChat 用的是"120 帧上限 + 8M 像素/图的预算"，超出部分**裁帧而不是拒绝**
 - 修复：帧数上限提到 120，并引入 8M 像素的**单图解码预算**（约 32MB 显存）——超预算时保留前若干帧（被裁短的 GIF 仍然会动、仍然能看清内容，而"拒绝"是用户无法处理的死路）。512px 尺寸上限不变
 - 说明：这也是为什么**表情面板里的 GIF 改成静态缩略图**——帧数上限提到 120 后，32 个格子同时逐帧动画会白白吃掉帧时间和显存（26px 的格子本来也看不清动画），而发到聊天里的消息仍然逐帧播放。GIF 表情在格子上会有 `GIF` 角标提示它是动图
 
+----
+
 **Fixed: sent GIFs did not animate (half of the 2.4.10 feature never landed)**
+
 - Symptom: a GIF animated in the emote panel but froze on its first frame once sent, while GIFs arriving from outside did animate
 - Root cause: the upload path read the file with `ImageIO.read` (which returns only the first frame for animated images) and re-encoded everything as PNG, announcing it as `image/png`. The animation was destroyed inside the client, so the receiver's animated decoder only ever saw one frame
 - Fix: animated sources are now sent **byte-for-byte** (no decode, no re-encode) with their real content type. Before sending, the file is checked against what the receiver can render (<=512px, <=48 frames, <=8MB); anything heavier is **rejected with a specific reason** (dimension / frame count / size) instead of being silently downgraded to a still image, since "sent but frozen" is exactly the bug being fixed
 - Also: image messages now carry a `name=` hint in their `[[CICode]]`, so extension-less host URLs are still recognised as animations on download
 
 **Fixed: QQ group relays arriving through the system channel all rendered as grey system text**
+
 - Symptom: `[QQ group] name: content` relays showed as grey system messages, while occasionally the same shape was recognised correctly as a player message
 - Root cause: the EasyBot parser required angle brackets around the name (`<name>`), but this server's template uses `[label] name: content` (no brackets) — so the parser declined and every line fell through to the text-heuristic fallback, which was right only sometimes. Worse, that fallback rebuilds the display name as "everything before the name + name" (`[QQ group] dangdang0721`), and since name matching prefers the longest match, one bad name poisoned the cache and then won every later match
 - Fix: the parser now accepts the labeled colon shape. The label is required — a bare `name: content` is ordinary chat and still belongs to the player path. This path no longer steps aside for known players, so relays from online players keep their skin and stop poisoning the name cache
 - Note: the angle-bracket shapes behave exactly as before, including the "known player steps aside for the player path" rule
 
 **Fixed: after pressing Tab on an empty chat input, typing stopped working (both 1.21.1 loaders)**
+
 - Symptom: opening chat and pressing Tab straight away killed typing and backspace until the chat screen was closed and reopened
 - Root cause: vanilla `ChatScreen` calls `setAllowHiding(false)` on its suggestor (Fabric: `setCanLeave(false)`) and E33Chat never did. Without it, Tab on an empty input makes the suggestor's `keyPressed` return false, so Tab fell through to the self-implemented focus navigation, which clears the focus when there is nowhere to go — and the chat field is built with `canLoseFocus=false`, so the focus never comes back
 - Fix: both loaders now make the vanilla call; the focus-clearing step also gained a guard so it never clears while the chat field still holds focus (arrow keys reach the same code)
 - Note: 1.20.1's `CommandSuggestions` has no such switch and opens the list on Tab anyway, so **Forge was never affected** and only received the guard
 
 **Fixed: the hotbar HUD disappeared while the chat panel was open (half of the 2.4.9 regression)**
+
 - Background: 2.4.9 hid the whole HUD layer behind E33Chat screens to fix issue #16 (the hotbar, potion icons and Jade tooltips showing through the translucent panel). 2.4.11 stopped it from also hiding the first-person hand, but the hotbar stayed hidden
 - Judgement: the chat panel is a **left-aligned narrow column** (~40% of the screen by default), while the hotbar sits centred at the bottom and status effects at the top right — both outside the panel. Hiding them bought nothing visually and cost the player sight of their hotbar
 - Fix: **the chat panel no longer hides the HUD**; the two config screens (full-width translucent backgrounds) still do
@@ -187,33 +333,39 @@
 - Standing rule: hiding the HUD never uses `options.hideGui` (that is F1 and also removes the first-person hand)
 
 **Added: framing for the custom panel background**
+
 - Problem: the background was "aspect-preserving center-crop" — undistorted, but with no way to choose which part survives. The panel is tall and narrow, so a wide picture loses its sides and the subject is often off-centre
 - Implementation: Settings -> Chat panel now shows "Adjust framing" + "Clear" once a picture is set. Picking a picture opens the framing editor directly: whole-picture preview with a selection box **locked to the panel's aspect ratio**; drag inside the box to pan, scroll to zoom. Confirm applies it
 - Storage: framing is saved as normalized values (centre + zoom) rather than an absolute rectangle, so changing the panel width, resizing the window or enabling fullscreen re-fits automatically instead of drifting. Clearing the picture clears the framing with it
 - A missing or unreadable picture still falls back to the default panel texture
 
 **Changed: custom emote pack limit 10 -> 32**
+
 - The emote grid was always scrollable, so 10 was an arbitrary number; the cap is now 32 and the docs match
 
 **Debug: the command suggestion list does not respond to mouse clicks (temporary instrumentation, not yet resolved)**
+
 - Symptom: the suggestion list cannot be clicked with the mouse (vanilla allows it)
 - Status: the click is wired up in code and the render and hit-test use the same rectangle, so static analysis could not explain it
 - This release adds temporary diagnostics (click point, panel offset, and the rectangle the list is built with) so one in-game reproduction can separate "an earlier branch eats the click" from "the drawn rect and the hit rect disagree". **Enable `debug_log` and reproduce once**; the fix is deferred to the next version
 
 **Fixed: your own images would "randomly fail to load"**
+
 - Symptom: after pasting a few images in a row, one of them reported a load failure; the log said `timed out after 30s` while only 6ms had passed, and the same file loaded fine moments later
 - Root cause (three things stacked):
-  1. **Every image wasted a download slot** — the animated probe fired a request for every `e33chat://media/` URL even when the CICode already carried `name=1.jpg` (a JPEG cannot animate), and each image already costs "one upload plus one download by its own sender"
-  2. **NeoForge never got the 2.4.11 de-duplication fix** — its `fetch` did a plain `FETCHES.put()`, so the second request for a mediaId (the probe and the static loader both fetch) replaced the first caller's future; the first then waited out its full 30-second timeout and reported a failure for an image that had already downloaded. The 2.4.11 merge fix only ever landed on Forge
-  3. **The log lied** — the server answers "rate limited" and "file missing" with the same sentinel, and the client reported both as a 30-second timeout, pointing every investigation at the network
+1. **Every image wasted a download slot** — the animated probe fired a request for every `e33chat://media/` URL even when the CICode already carried `name=1.jpg` (a JPEG cannot animate), and each image already costs "one upload plus one download by its own sender"
+2. **NeoForge never got the 2.4.11 de-duplication fix** — its `fetch` did a plain `FETCHES.put()`, so the second request for a mediaId (the probe and the static loader both fetch) replaced the first caller's future; the first then waited out its full 30-second timeout and reported a failure for an image that had already downloaded. The 2.4.11 merge fix only ever landed on Forge
+3. **The log lied** — the server answers "rate limited" and "file missing" with the same sentinel, and the client reported both as a 30-second timeout, pointing every investigation at the network
 - Fix: (1) `animatedEntry` short-circuits `.jpg/.jpeg/.bmp` (those cannot animate; `.png` is still probed because APNG shares the extension), (2) `MediaClient` keeps a **local cache of our own uploads** (24-entry LRU) so the sender's own images come from memory — no download slot, nothing to fail, (3) NeoForge and Fabric now use `computeIfAbsent` to merge concurrent fetches like Forge does, (4) timeouts and refusals are logged as the different things they are, (5) the server rate limit goes from 4 to 16 per 10 seconds (still bounding abuse, no longer punishing a normal paste-a-few session)
 
 **Fixed: the background framing screen was blank (bug in the new framing feature)**
+
 - Symptom: choosing a panel background and then opening the framing editor showed nothing at all
 - Root cause: `PanelBackground.ensureLoaded()` was only ever called while the chat panel rendered. The settings screen and the framing screen do not draw the chat panel, so a picture chosen there never started loading and `imageWidth()` stayed 0
 - Fix: the framing screen starts the load itself, polls for the size while it loads and re-lays out once it arrives, and shows "Loading the background image...", a **red specific reason** on failure (unsupported format / missing file) or "No background image set" — no more staring at an empty screen
 
 **Changed: animation limits aligned with AtomChat (48 -> 120 frames, trimming instead of rejecting)**
+
 - Symptom: a 66-frame and a 72-frame GIF were refused here while AtomChat accepted the same files
 - Root cause: E33Chat used "48-frame hard cap, reject past it"; AtomChat uses "120-frame cap plus an 8M-pixel-per-image budget", trimming the tail instead of refusing
 - Fix: the frame cap is now 120, with an 8M-pixel **decoded budget per image** (~32 MB of GPU memory) that keeps the first frames when a longer animation would exceed it — a trimmed GIF still plays and still reads, while a rejection is a dead end the user cannot act on. The 512px dimension cap is unchanged
@@ -222,82 +374,91 @@
 ## v2.4.11
 
 **修复：群组菜单点击任意位置都会闪一下（2.4.10 回归）**
+
 - 现象：`[+]` 打开群组弹层后创建群组，之后点击任意区域或按任意键，菜单都会重播一次关闭动画（弹一下立刻消失）
 - 根因：弹层的关闭动画到期后没人把 `visible` 置为 false（设置/表情/快捷/搜索四个弹层都在 `tick()` 里收尾，唯独群组弹层漏了），于是它一直处于"可见但完全透明"的状态；后续每次点击都判定"点击在面板外"，再次触发 `closeGroupBrowser()`
 - 修复：`tick()` 补上群组弹层的关闭收尾（新增 `hideGroupBrowser()`），打开时清掉上一次的关闭时间戳；顺带让"创建"与"加入"行为一致——创建后自动切到新群页签并收起弹层（点击 `[创建]` 和输入框回车两条路径都改了）
 - 顺带：群组弹层标题右侧加了「点击群名即可加入」提示——群组没有邀请流程，加入就是点一下别人的群名
 
 **修复：其他玩家的名字出现下划线且整段可点击（2.4.5 选区功能回归，commit c5104c40）**
+
 - 现象：气泡上方发送者名字带下划线，点击会触发服务端挂在名字上的 `/tell` 建议指令；此前版本从未如此
 - 根因：c5104c40 为做文本选择，把名字行从直接 `drawString` 改为走 `renderLineWithClicks`；该方法会给"样式带 ClickEvent 的字符"加下划线并登记点击区——而服务端给玩家名字挂的正是 `suggest_command: /tell <名>` 点击事件（持久化历史的 senderJson 可证）
 - 修复：`renderLineWithClicks` 增加 `clickable` 开关，名字行传 `false`——不再加下划线、不再注册点击目标；文本选择仍可用（名字走该方法的初衷）
 
-**Fixed: sender names showed an underline and were clickable (regression from the 2.4.5 selection feature, commit c5104c40)**
-- Symptom: the sender name above a bubble was underlined and clicking it triggered the `/tell` suggest-command event the server attaches to names; never like this before
-- Root cause: c5104c40 routed the name row through `renderLineWithClicks` (for text selection); that method underlines characters whose style carries a ClickEvent and registers them as click targets — and the server attaches exactly such an event (`suggest_command: /tell <name>`) to player names (visible in the persisted history's senderJson)
-- Fix: `renderLineWithClicks` gained a `clickable` flag; the name row passes `false` — no underline, no click target, while text selection keeps working (the reason names go through this method at all)
-
 **修复：群组消息出现在「全部」页签（改为群消息只在对应群页签显示）**
+
 - 现象：在「全部」页签能看到群组消息，与公共世界聊天混在一起，读感像"群消息泄露到世界频道"
 - 说明：排查了当轮双端持久化历史，群消息的 group 标记全部正确，"世界"页签的过滤不可能放入带群标记的消息；"泄露"实际发生在「全部」页签——它此前不过滤任何消息
 - 修复：「全部」语义改为 **世界 + 系统**，群组消息只出现在对应群页签；页签功能未启用时（未装服务端 mod）仍显示全部消息，行为不变
 
+**修复：群组消息发送报错"参数后应有空格分隔"（中文群名）**
+
+- 现象：群名叫「妈妈」时，在群组页签发消息会在聊天栏出现 `参数后应有空格分隔，但发现了紧邻的数据`，消息发不出去
+- 根因：客户端把群组发言改写为 `/e33chat group msg 妈妈 ？？`，但命令用的是 Brigadier 的 `StringArgumentType.string()`（QUOTABLE_PHRASE），未加引号时只接受 `[0-9A-Za-z_.-]`——中文名被解析成"空参数 + 剩余数据"而报错（英文名恰好能用，所以测试时没暴露）
+- 修复：`group` 子命令的名称/文本参数全部改用 `greedyString()`；`msg` 改为单个 rest 参数，由服务端 `GroupManager.splitSay()` 在第一个空格处切分（群名本身不允许空格，切分无歧义）
+
+**修复：打开聊天面板时物品栏 HUD 与第一人称手消失（2.4.9 回归）**
+
+- 现象：打开聊天窗口后，底部物品栏、准星、血条等原版 HUD 消失，第一人称的手和手持物品也不见了
+- 根因：2.4.9 用 `options.hideGui` 隐藏半透明屏幕背后的 HUD，但这个字段就是 **F1 的开关**——原版 `GameRenderer` 渲染第一人称手/手持物品时也检查它，所以一并被关掉了
+- 修复：改用只跳过 HUD 层的机制（Forge/Neo 取消 `RenderGuiEvent.Pre`，Fabric 注入 `InGameHud.render` 提前返回），并加引用计数（聊天面板 → 配置屏 → 服务端配置屏可嵌套，全部关闭后才恢复 HUD）。**预期行为现在是：只有按 F1 才隐藏全部 HUD，打开 E33Chat 界面仅隐藏 HUD 层、保留手与世界**
+
+**修复：服务器托管图片偶发"图片加载失败"（2.4.10 回归）**
+
+- 现象：连续发送多张服务器托管图片（`e33chat://media/...`）后，第 4 张开始显示"图片加载失败"，此前几张正常
+- 根因：2.4.10 的动图探测（GIF/WebP 内容识别）和静态图片加载器会**各自**向服务器请求同一张图片，而服务端有"每玩家 10 秒 4 次"的传输限流——每张图占 2 次配额，第 4 张就被限流
+- 修复：`MediaClient.fetch` 对同一 mediaId 的并发请求合并为一个在途请求（后来的调用者复用同一个 Future，不再单独发包），配额消耗回到每张图 1 次
+
+----
+
+**Fixed: sender names showed an underline and were clickable (regression from the 2.4.5 selection feature, commit c5104c40)**
+
+- Symptom: the sender name above a bubble was underlined and clicking it triggered the `/tell` suggest-command event the server attaches to names; never like this before
+- Root cause: c5104c40 routed the name row through `renderLineWithClicks` (for text selection); that method underlines characters whose style carries a ClickEvent and registers them as click targets — and the server attaches exactly such an event (`suggest_command: /tell <name>`) to player names (visible in the persisted history's senderJson)
+- Fix: `renderLineWithClicks` gained a `clickable` flag; the name row passes `false` — no underline, no click target, while text selection keeps working (the reason names go through this method at all)
+
 **Fixed: group messages appeared in the "All" tab (they now show only in their own group tab)**
+
 - Symptom: the "All" tab mixed group messages into the public world feed, which read as "group messages leaking into the world channel"
 - Note: both clients' persisted histories from the reported session carry correct group tags, so the literal "World tab shows group messages" is not reachable in code; the mixing happened in "All", which previously never filtered
 - Fix: "All" now means **world + system**; group messages appear only in their group's tab. When the tab strip is unavailable (no server mod) nothing is filtered, as before
 
 **Fixed: the group menu flickered on every click (2.4.10 regression)**
+
 - Symptom: after opening the `[+]` group popup and creating a group, any later click or keypress replayed the popup's close animation (it flashed and vanished)
 - Root cause: nothing set `visible = false` when the popup's close animation finished — the settings/emoji/quick-chat/search popups all finish in `tick()`, but the group popup was missing from that list, so it stayed "visible at zero alpha"; every subsequent click was then treated as an outside click and called `closeGroupBrowser()` again
 - Fix: `tick()` now finishes the group popup's close (new `hideGroupBrowser()`), and opening it clears the previous close timestamp. Create now behaves like join: after creating, the panel switches to the new group's tab and closes (both the `[Create]` button and the Enter-in-input path)
 - Also: the group popup title now carries a "Click a name to join" hint — there is no invite flow; joining is just clicking another player's group name
 
-**修复：群组消息发送报错"参数后应有空格分隔"（中文群名）**
-- 现象：群名叫「妈妈」时，在群组页签发消息会在聊天栏出现 `参数后应有空格分隔，但发现了紧邻的数据`，消息发不出去
-- 根因：客户端把群组发言改写为 `/e33chat group msg 妈妈 ？？`，但命令用的是 Brigadier 的 `StringArgumentType.string()`（QUOTABLE_PHRASE），未加引号时只接受 `[0-9A-Za-z_.-]`——中文名被解析成"空参数 + 剩余数据"而报错（英文名恰好能用，所以测试时没暴露）
-- 修复：`group` 子命令的名称/文本参数全部改用 `greedyString()`；`msg` 改为单个 rest 参数，由服务端 `GroupManager.splitSay()` 在第一个空格处切分（群名本身不允许空格，切分无歧义）
-
 **Fixed: sending a group message failed with "Expected whitespace to end one argument" for CJK group names**
+
 - Symptom: with a group named 妈妈, sending from the group tab printed `参数后应有空格分隔，但发现了紧邻的数据` in chat and the message never went out
 - Root cause: the client rewrites group sends to `/e33chat group msg 妈妈 ？？`, but the command used Brigadier's `StringArgumentType.string()` (QUOTABLE_PHRASE), which unquoted only accepts `[0-9A-Za-z_.-]` — the CJK name parsed as an empty argument plus trailing data and was rejected (ASCII names happened to work, which is why testing missed it)
 - Fix: all `group` name/text arguments now use `greedyString()`; `msg` takes a single rest argument that the server splits at the first space via `GroupManager.splitSay()` (group names cannot contain whitespace, so the split is unambiguous)
 
-**修复：打开聊天面板时物品栏 HUD 与第一人称手消失（2.4.9 回归）**
-- 现象：打开聊天窗口后，底部物品栏、准星、血条等原版 HUD 消失，第一人称的手和手持物品也不见了
-- 根因：2.4.9 用 `options.hideGui` 隐藏半透明屏幕背后的 HUD，但这个字段就是 **F1 的开关**——原版 `GameRenderer` 渲染第一人称手/手持物品时也检查它，所以一并被关掉了
-- 修复：改用只跳过 HUD 层的机制（Forge/Neo 取消 `RenderGuiEvent.Pre`，Fabric 注入 `InGameHud.render` 提前返回），并加引用计数（聊天面板 → 配置屏 → 服务端配置屏可嵌套，全部关闭后才恢复 HUD）。**预期行为现在是：只有按 F1 才隐藏全部 HUD，打开 E33Chat 界面仅隐藏 HUD 层、保留手与世界**
-
 **Fixed: the hotbar HUD and first-person hand disappeared while the chat panel was open (2.4.9 regression)**
+
 - Symptom: opening the chat window hid the vanilla HUD (hotbar, crosshair, health bar) and also removed the first-person hand and held item
 - Root cause: 2.4.9 hid the HUD behind translucent screens by setting `options.hideGui` — that is the **F1 toggle**, and vanilla `GameRenderer` also gates first-person hand/held-item rendering on it, so those disappeared too
 - Fix: skip only the HUD layer (Forge/Neo cancel `RenderGuiEvent.Pre`; Fabric injects `InGameHud.render` and returns early) with a reference count, because screens nest (chat panel → config → server config) and the HUD must return only when the last one closes. **Expected behaviour now: only F1 hides the whole HUD; opening an E33Chat screen hides the HUD layer while keeping the hand and the world**
 
-**修复：服务器托管图片偶发"图片加载失败"（2.4.10 回归）**
-- 现象：连续发送多张服务器托管图片（`e33chat://media/...`）后，第 4 张开始显示"图片加载失败"，此前几张正常
-- 根因：2.4.10 的动图探测（GIF/WebP 内容识别）和静态图片加载器会**各自**向服务器请求同一张图片，而服务端有"每玩家 10 秒 4 次"的传输限流——每张图占 2 次配额，第 4 张就被限流
-- 修复：`MediaClient.fetch` 对同一 mediaId 的并发请求合并为一个在途请求（后来的调用者复用同一个 Future，不再单独发包），配额消耗回到每张图 1 次
-
 **Fixed: server-hosted images intermittently failed to load (2.4.10 regression)**
+
 - Symptom: after sending several server-hosted images (`e33chat://media/...`) in a row, the 4th onwards showed "image load failed" while the earlier ones were fine
 - Root cause: the 2.4.10 animated-image probe (GIF/WebP content detection) and the static image loader each requested the same image from the server, and the server rate-limits transfers to 4 per player per 10 seconds — two requests per image burnt the quota, so the 4th image was throttled
 - Fix: `MediaClient.fetch` now merges concurrent requests for the same mediaId into one in-flight request (later callers reuse the same Future instead of sending their own packet), so each image costs one slot again
 
-
 ## v2.4.10
 
 **修复：打开聊天面板崩溃（NPE，2.4.9 回归）**
+
 - 现象：从 2.4.8 或更早升级到 2.4.9/2.4.10 后，按 T 打开聊天界面直接崩溃（`NullPointerException: Cannot read field "f_91066_" because "this.f_96541_" is null`）
 - 根因：2.4.9 为隐藏半透明屏幕下的原版 HUD，在 `ChatBubbleScreen` **构造器**里读取 `minecraft.options.hideGui`；而 `Screen.minecraft` 要等 `setScreen()` 调用 `init()` 时才赋值，构造发生在 `ScreenEvent.Opening` 事件内部——此时该字段仍是 null。Forge/Neo 三个半透明界面（聊天面板/客户端配置/服务端配置）同款写法，本次一并修正
 - 修复：改为在 `init()` 内用一次性守卫保存原 `hideGui` 状态（与 Fabric 端既有做法一致），构造器不再触碰 `minecraft`
 
-**Fixed: crash when opening the chat panel (NPE, 2.4.9 regression)**
-- Symptom: after upgrading from 2.4.8 or earlier to 2.4.9/2.4.10, pressing T to open the chat screen crashed the game (`NullPointerException: Cannot read field "f_91066_" because "this.f_96541_" is null`)
-- Root cause: to hide the vanilla HUD behind translucent screens, 2.4.9 read `minecraft.options.hideGui` inside the `ChatBubbleScreen` **constructor**; `Screen.minecraft` is only assigned when `setScreen()` runs `init()`, and construction happens inside the `ScreenEvent.Opening` event — so the field was still null. All three Forge/Neo translucent screens (chat panel / client config / server config) shared the pattern and are fixed together
-- Fix: capture the original `hideGui` state in `init()` behind a one-shot guard (matching the existing Fabric implementation); the constructors no longer touch `minecraft`
-
-
 **新增：聊天群组（三端同步，服务器需同步升级到 2.4.10）**
+
 - 服务器内置群组系统，无需任何外置插件：服主装 E33Chat 即用，群组持久化在 `serverconfig/e33chat-groups.json`
 - 聊天面板顶部新增页签条：全部 / 世界 / 系统 / 已加入的群组；`[+]` 打开群组浏览弹层（点击加入、退出、输入名称创建）
 - 激活群组页签后发言自动改走群组路由，仅群成员可见；世界/全部页签走原版公屏；系统页签为只读公告
@@ -306,7 +467,34 @@
 - 群消息支持引用与 @ 提醒；单人游戏与未启用的服务器自动隐藏页签，零打扰
 - **协议变更（对端需同版本）**：历史记录条目与消息元数据新增 group 字段；新增 4 个网络包（旧客户端安全丢弃，混版本时群组页签不显示、其余功能不受影响）
 
+**新增：自定义面板背景图（三端同步）**
+
+- 设置 → 聊天框 → 面板：`panel_bg_image`（图片路径，支持 [浏览…] 系统文件对话框选择）与 `panel_bg_opacity`（0-100，与面板不透明度叠加）
+- 图片按比例居中裁剪铺满面板（cover），加载失败自动回退默认面板纹理，不会导致聊天不可用
+- 路径支持绝对路径或相对游戏目录
+
+**新增：GIF 动图消息与表情（三端同步）**
+
+- 聊天图片、行内表情、自定义表情面板中的 GIF/WebP/APNG 现在逐帧播放（最多 48 帧、512px 上限）
+- GIF 逐帧解码含 canvas 合成与 disposal 处理（增量帧动画不再花屏）；动画解码期间静态首帧不抢跑，解码失败自动回退静态图
+- 服务器直传（e33chat://media）与 http(s) 图床链接均支持动画
+
+**新增：玩家资料卡（三端同步）**
+
+- 右键头像菜单新增"查看资料"：展示头像（脸+帽层）、名称、自己/在线/离线徽标、UUID、延迟、游戏模式
+- 快捷操作：私聊（自动打开 /msg）、复制 UUID；Esc 或点击空白处返回聊天
+- 纯客户端功能，零服务器依赖
+
+----
+
+**Fixed: crash when opening the chat panel (NPE, 2.4.9 regression)**
+
+- Symptom: after upgrading from 2.4.8 or earlier to 2.4.9/2.4.10, pressing T to open the chat screen crashed the game (`NullPointerException: Cannot read field "f_91066_" because "this.f_96541_" is null`)
+- Root cause: to hide the vanilla HUD behind translucent screens, 2.4.9 read `minecraft.options.hideGui` inside the `ChatBubbleScreen` **constructor**; `Screen.minecraft` is only assigned when `setScreen()` runs `init()`, and construction happens inside the `ScreenEvent.Opening` event — so the field was still null. All three Forge/Neo translucent screens (chat panel / client config / server config) shared the pattern and are fixed together
+- Fix: capture the original `hideGui` state in `init()` behind a one-shot guard (matching the existing Fabric implementation); the constructors no longer touch `minecraft`
+
 **Added: chat groups (all three loaders, the server must also run 2.4.10)**
+
 - In-mod group system with zero external plugins: install E33Chat on the server and it works; groups persist in `serverconfig/e33chat-groups.json`
 - New tab strip on top of the chat panel: All / World / System / joined groups; `[+]` opens the group browser (click to join, leave, or type a name to create)
 - Speaking while a group tab is active routes the message to group members only; World/All tabs use public chat; the System tab is read-only announcements
@@ -315,85 +503,74 @@
 - Group messages support quotes and @ notifications; tabs hide automatically in singleplayer or when the server disables groups
 - **Protocol change (both ends need the same version)**: history entries and message metadata gain a group field; 4 new packets (old clients drop them safely — on mixed versions the tab strip simply stays hidden)
 
-**新增：自定义面板背景图（三端同步）**
-- 设置 → 聊天框 → 面板：`panel_bg_image`（图片路径，支持 [浏览…] 系统文件对话框选择）与 `panel_bg_opacity`（0-100，与面板不透明度叠加）
-- 图片按比例居中裁剪铺满面板（cover），加载失败自动回退默认面板纹理，不会导致聊天不可用
-- 路径支持绝对路径或相对游戏目录
-
 **Added: custom chat panel background image (all three loaders)**
+
 - Settings → Chat panel: `panel_bg_image` (path, with a Browse… native file dialog) and `panel_bg_opacity` (0-100, multiplied with the panel opacity)
 - The image is drawn aspect-preserving, center-cropped to cover the panel; a failed load falls back to the default panel texture, so chat can never break
 - Both absolute paths and paths relative to the game directory work
 
-**新增：GIF 动图消息与表情（三端同步）**
-- 聊天图片、行内表情、自定义表情面板中的 GIF/WebP/APNG 现在逐帧播放（最多 48 帧、512px 上限）
-- GIF 逐帧解码含 canvas 合成与 disposal 处理（增量帧动画不再花屏）；动画解码期间静态首帧不抢跑，解码失败自动回退静态图
-- 服务器直传（e33chat://media）与 http(s) 图床链接均支持动画
-
 **Added: animated GIF messages and emotes (all three loaders)**
+
 - Chat images, inline emotes and custom emoji-panel emotes in GIF/WebP/APNG format now play frame by frame (up to 48 frames, 512px cap)
 - GIF decoding composes frame deltas on the logical canvas and honors disposal methods; while an animation is still decoding the static first frame no longer wins the race, and failed decodes fall back to the static image
 - Both server-hosted media (e33chat://media) and http(s) image hosts animate
 
-**新增：玩家资料卡（三端同步）**
-- 右键头像菜单新增"查看资料"：展示头像（脸+帽层）、名称、自己/在线/离线徽标、UUID、延迟、游戏模式
-- 快捷操作：私聊（自动打开 /msg）、复制 UUID；Esc 或点击空白处返回聊天
-- 纯客户端功能，零服务器依赖
-
 **Added: player profile card (all three loaders)**
+
 - The avatar context menu gains "View Profile": skin (face + hat layer), name, You/Online/Offline badge, UUID, latency and game mode
 - Quick actions: whisper (opens /msg), copy UUID; Esc or clicking outside returns to chat
 - Purely client-side, no server dependency
 
-
 ## v2.4.9
 
 **修复：F3 调试屏开启时聊天图标 / 横幅不再残留（三端同步，issue #16）**
+
 - F1 隐藏走的是原版 hideGui：整个 HUD 渲染被跳过，所以 E33Chat 图标会跟着消失；F3 并不会设置 hideGui，此前左下角聊天图标、`[T]` 键位提示和通知横幅仍会盖在调试信息上
 - 现在 F3 调试屏开启时，E33Chat 的 HUD 元素（聊天图标 / 红点 / 键位文字 / 通知横幅）整组隐藏，与 F1 行为一致
 
-**Fixed: the chat icon / banner no longer linger when the F3 debug screen is open (all three loaders, issue #16)**
-- F1 hiding is vanilla hideGui: the whole HUD render pass is skipped, so the E33Chat icon already disappeared. F3 does not toggle hideGui, so the bottom-left chat icon, the `[T]` key hint and the notification banner used to remain on top of the debug text
-- When the F3 debug screen is open, all E33Chat HUD elements (chat icon / red dot / key text / notification banner) are now hidden together, matching F1
-
 **改进：E33Chat 半透明界面打开时隐藏原版 HUD（三端同步，issue #16）**
+
 - 1.20.1 原版在有 Screen 打开时仍会渲染 HUD（快捷栏、药水效果、原版聊天等），而 E33Chat 的设置界面 / 服务端设置 / 聊天面板背景是半透明的，这些 HUD 元素会透过半透明层显示出来
 - 现在打开 E33Chat 配置屏、服务端配置屏或聊天窗口时，会临时隐藏原版 HUD（含 HUD 层第三方提示框，如 Jade），关闭后自动还原；半透明“能看到世界”的设计保持不变
 - 效果：设置界面底部不再残留快捷栏、右上角不再残留药水“效果”；聊天面板打开时不再与 Jade 等 HUD 提示框重叠。若指代的是 Jade 的 3D 方块描边（世界空间），HUD 标志管不到它，请把面板透明度调高或改不透明
 
-**Improved: hide the vanilla HUD while E33Chat translucent screens are open (all three loaders, issue #16)**
-- Vanilla 1.20.1 still renders the HUD (hotbar, status effects, vanilla chat, etc.) while a Screen is open, and E33Chat's config / server-config / chat-panel backgrounds are translucent — so those HUD elements showed through
-- While an E33Chat config screen, server config screen, or chat window is open, the vanilla HUD (including HUD-layer third-party tooltips such as Jade) is now hidden temporarily and restored on close; the translucent “world visible through the panel” look is preserved
-- Result: the config screen no longer keeps the hotbar at the bottom or the potion-effect icons at the top right, and the chat panel no longer overlaps HUD-drawn tooltips such as Jade. If “Jade highlight” means its 3D block outline (world-space), the HUD flag cannot remove it; raise the panel opacity / make it opaque instead
-
 **新增：HUD 聊天图标可自定义位置（三端同步，issue #16）**
+
 - 新增 `hud_icon_x`（默认 3px，距屏幕左边缘）与 `hud_icon_y`（默认 20px，距屏幕底边缘）两项配置
 - HUD 配置页“聊天图标”分区新增对应输入行；图标、红点、键位文字与“点图标开聊天”的命中区域全部跟随新位置
 - 旧配置文件缺少这两个键时自动按默认值补齐
 
+----
+
+**Fixed: the chat icon / banner no longer linger when the F3 debug screen is open (all three loaders, issue #16)**
+
+- F1 hiding is vanilla hideGui: the whole HUD render pass is skipped, so the E33Chat icon already disappeared. F3 does not toggle hideGui, so the bottom-left chat icon, the `[T]` key hint and the notification banner used to remain on top of the debug text
+- When the F3 debug screen is open, all E33Chat HUD elements (chat icon / red dot / key text / notification banner) are now hidden together, matching F1
+
+**Improved: hide the vanilla HUD while E33Chat translucent screens are open (all three loaders, issue #16)**
+
+- Vanilla 1.20.1 still renders the HUD (hotbar, status effects, vanilla chat, etc.) while a Screen is open, and E33Chat's config / server-config / chat-panel backgrounds are translucent — so those HUD elements showed through
+- While an E33Chat config screen, server config screen, or chat window is open, the vanilla HUD (including HUD-layer third-party tooltips such as Jade) is now hidden temporarily and restored on close; the translucent “world visible through the panel” look is preserved
+- Result: the config screen no longer keeps the hotbar at the bottom or the potion-effect icons at the top right, and the chat panel no longer overlaps HUD-drawn tooltips such as Jade. If “Jade highlight” means its 3D block outline (world-space), the HUD flag cannot remove it; raise the panel opacity / make it opaque instead
+
 **Added: customisable HUD chat icon position (all three loaders, issue #16)**
+
 - New `hud_icon_x` (default 3px, from the left edge) and `hud_icon_y` (default 20px, from the bottom edge) settings
 - The HUD config screen's “Chat Icon” section gained matching input rows; the icon, red dot, key text and the click-to-open-chat hit region all follow the new position
 - Old config files without these keys automatically fall back to the defaults
 
 ## v2.4.8
 
-
 **新增：清空聊天历史按钮（设置菜单）**
+
 - 齿轮设置菜单新增“清空聊天历史”（垃圾桶图标）：清空当前世界的内存消息 + 本地历史文件（含 legacy 文件），不影响其他世界
 - 两击确认防误触：第一次点击后该行变红“确认清空？”，1 秒内再点同一行才执行；点别处 / ESC / 超时 / 点其他菜单项都会取消
 - 空历史时第一次点击直接提示“没有可清空的历史”，不进入确认状态
 - 清空成功后复用现有 toast 提示“已清空聊天历史”
 - 异步保存防复活：清空时递增 generation，旧快照不再把已删除的历史文件写回
 
-**Added: Clear chat history button (settings menu)**
-- New “Clear Chat History” item in the gear settings menu (trash icon): clears the current world’s in-memory messages and local history file (including legacy files); other worlds are untouched
-- Two-click confirm to prevent accidents: the first click turns the row red (“Confirm clear?”), and a second click within 1 second executes; clicking elsewhere / ESC / timeout / choosing another item cancels
-- On empty history the first click directly shows “No history to clear” and does not arm the confirm state
-- Reuses the existing toast for “Chat history cleared”
-- Async-save resurrection guard: clearing bumps a generation counter so stale snapshots cannot rewrite the deleted history file
-
 **修复：EasyBot 群消息没被解析成玩家气泡（三端同步）**
+
 - 转发行是机器人侧拼装的，`[群名]` 前缀并不固定：实测服的模板就是 `<昵称> 内容`（既没有群名前缀，也没有 QQ 号）。旧解析器强制要求开头有 `[标签]`，这类行全部落回灰色系统消息（issue #15）
 - 现在 `[群名]` 前缀改为可选，只要 `<名字> 内容` 结构成立就按玩家气泡解析；`<昵称（群名片）>` 这类后缀保留在显示名里，全角括号 `（123456789）` 也识别为 QQ 号
 - 兼容开关改为默认开启：服务端装了 e33chat 时仍以服务端开关为准（可显式关闭）；服务端没装 / 版本旧到不会同步该开关时，客户端按开启处理，不再因为等不到服务端指令而什么都不做
@@ -401,15 +578,8 @@
 - 调试日志新增 `System(EasyBot miss)`：开 debug 后，形状像转发但没被采纳的行会单独打一条，方便直接判断模板是否匹配
 - 新增 7 例 EasyBotParser 单测（无群名前缀 / 群名片后缀 / 全角括号 QQ / 空正文 / 广播名 / 尖括号不在行首 / 超长名）
 
-**Fixed: EasyBot group relays were not parsed as player bubbles (all three builds)**
-- The relay line is assembled bot-side, so the `[群名]` prefix is not guaranteed — the reporting server's template is simply `<nick> content` (no group label, no QQ number). The old parser required a leading `[label]`, so those lines fell back to grey system messages (issue #15)
-- The `[群名]` prefix is now optional: any `<name> content` line parses as a player bubble. A `<nick（group card）>` suffix stays part of the display name, and full-width `（123456789）` parentheses are recognised as the QQ number too
-- Compatibility is now on by default: servers running e33chat still decide (the server toggle can explicitly disable it); when the server runs no (or an older) e33chat and never syncs the flag, the client treats it as enabled instead of silently doing nothing
-- False-positive guards unchanged: blank content, names longer than 32 chars, and generic broadcast labels (`<系统>`, `[公告] <Server> ...`) stay system messages; a name that exactly matches an online player is handed back to the player path so its real UUID and skin are preserved
-- New `System(EasyBot miss)` debug line: relay-shaped lines the parser declined are logged individually, so a template mismatch is diagnosable from the log alone
-- Added 7 EasyBotParser unit tests (no group label / group-card suffix / full-width QQ parens / blank content / broadcast name / angle brackets not at line start / over-long name)
-
 **修复：装了 ChatImage 后，聊天里的图片在气泡中不显示（三端同步）**
+
 - ChatImage 用 `@ModifyVariable` 直接改写 `ChatHud.addMessage` 的组件参数：消息里的 `[[CICode,url=...]]` 被替换成它自己的组件（文本变占位、URL 藏进自定义 `show_chatimage` hover，value 是 `ChatImageCode` 对象）。e33chat 捕获时括号码已经没了，而 `BracketCodec` 的 hover 取值只认 JSON / String 两种，`ChatImageCode` 对象取不出 URL → 气泡里没有图
 - 现在 hover value 不是 JSON/String 时，会按 `ChatImageCode.toString()`（就是原始的 `[[CICode,url=...]]`）把 URL 解析回来；零反射、不依赖 ChatImage 的类
 - hover action 识别加兜底：`toString()` 不是 action id 时，改看 value 的类名是否含 `chatimage`
@@ -417,7 +587,27 @@
 - 原版聊天栏不受影响：装了 ChatImage 就由 ChatImage 自己画图，没装则沿用 `[图片]` 占位
 - 新增 3 例 BracketCodecUrlTest（ChatImageCode 字符串还原 / 裸 URL 透传 / 非 URL 拒绝）
 
+----
+
+**Added: Clear chat history button (settings menu)**
+
+- New “Clear Chat History” item in the gear settings menu (trash icon): clears the current world’s in-memory messages and local history file (including legacy files); other worlds are untouched
+- Two-click confirm to prevent accidents: the first click turns the row red (“Confirm clear?”), and a second click within 1 second executes; clicking elsewhere / ESC / timeout / choosing another item cancels
+- On empty history the first click directly shows “No history to clear” and does not arm the confirm state
+- Reuses the existing toast for “Chat history cleared”
+- Async-save resurrection guard: clearing bumps a generation counter so stale snapshots cannot rewrite the deleted history file
+
+**Fixed: EasyBot group relays were not parsed as player bubbles (all three builds)**
+
+- The relay line is assembled bot-side, so the `[群名]` prefix is not guaranteed — the reporting server's template is simply `<nick> content` (no group label, no QQ number). The old parser required a leading `[label]`, so those lines fell back to grey system messages (issue #15)
+- The `[群名]` prefix is now optional: any `<name> content` line parses as a player bubble. A `<nick（group card）>` suffix stays part of the display name, and full-width `（123456789）` parentheses are recognised as the QQ number too
+- Compatibility is now on by default: servers running e33chat still decide (the server toggle can explicitly disable it); when the server runs no (or an older) e33chat and never syncs the flag, the client treats it as enabled instead of silently doing nothing
+- False-positive guards unchanged: blank content, names longer than 32 chars, and generic broadcast labels (`<系统>`, `[公告] <Server> ...`) stay system messages; a name that exactly matches an online player is handed back to the player path so its real UUID and skin are preserved
+- New `System(EasyBot miss)` debug line: relay-shaped lines the parser declined are logged individually, so a template mismatch is diagnosable from the log alone
+- Added 7 EasyBotParser unit tests (no group label / group-card suffix / full-width QQ parens / blank content / broadcast name / angle brackets not at line start / over-long name)
+
 **Fixed: images no longer render in bubbles when ChatImage is installed (all three builds)**
+
 - ChatImage rewrites the `ChatHud.addMessage` component argument via `@ModifyVariable`: the `[[CICode,url=...]]` in a message is replaced by its own component (placeholder text, the URL hidden inside a custom `show_chatimage` hover whose value is a `ChatImageCode` object). By the time e33chat captured the line the bracket was gone, and `BracketCodec` only understood JSON / String hover values — so the URL was unreachable and the bubble showed no image
 - When the hover value is neither JSON nor a String, the URL is now parsed back out of `ChatImageCode.toString()` (which is the original `[[CICode,url=...]]`); no reflection, no dependency on ChatImage classes
 - Hover-action detection gained a fallback: when `toString()` is not the action id, the payload's class name is checked for `chatimage`
@@ -425,29 +615,35 @@
 - The vanilla surface is untouched: with ChatImage installed ChatImage still draws its own image, without it the `[图片]` placeholder remains
 - Added 3 BracketCodecUrlTest cases (ChatImageCode string recovery / bare URL passthrough / non-URL rejection)
 
-
 ## v2.4.7
 
 **修复：上键翻阅历史被指令补全抢占（四端同步）**
+
 - 上键从历史记录翻回一条指令（如 `/time set 1`）后，补全窗口会自动弹出，下一次按上键被补全列表吃掉，无法继续向上翻历史；原版聊天框只在按 Tab 时才进入补全
 - 现在与原版一致：从历史填入文本时关闭补全自动弹出（原版 `setAllowSuggestions(false)` 同款），重新编辑文本或按 Tab 时补全照常恢复
 - 同修：从历史翻回含 `@` 的消息时，@提及候选列表也不再自动弹出抢占上下键
 
+----
+
 **Fixed: Up-arrow history navigation no longer hijacked by command completion (all four builds)**
+
 - Pressing Up to recall a command from history (e.g. `/time set 1`) auto-opened the suggestion window, and the next Up press cycled the suggestion list instead of going further back in history; vanilla chat only enters completion on Tab
 - Now matches vanilla: text filled from history disables the auto-suggestion popup (vanilla's own `setAllowSuggestions(false)` behaviour); suggestions return as soon as you edit the text again, or on Tab
 - Also fixed: recalling a history entry containing `@` no longer auto-opens the @mention candidate list (same Up/Down hijack)
 
-
 ## v2.4.6
 
 **消息紧凑分组（三端同步：Fabric / Forge / NeoForge）**
+
 - 配置“隐藏连续消息头像”升级为**消息紧凑分组**，默认值 true → false：开启后同一人 5 分钟内的连续消息只在首条显示头像和名字，后续只留气泡（类 Discord/Telegram）；此前只隐藏头像，名字和间距都不变
 - 紧凑分组时组内后续消息：不再绘制名字行（每条省出名字行高度）、气泡顶对齐行顶、横向保持原气泡列对齐、与上一条间距收紧为 max(2, message_gap/3)（默认 6→2px）
 - 表情消息、图片消息同样适用紧凑分组；分组仍被系统消息和时间分隔线打断；头像的 @提及左键与右键菜单命中区随头像一起隐藏
 - 三处布局循环（总高/渲染/跳转）同步更新，滚动与“跳到下一条”定位一致；新增 groupedGap 纯函数单测
 
+----
+
 **Compact message groups (all three loaders: Fabric / Forge / NeoForge)**
+
 - The "hide repeated avatars" toggle is upgraded to **compact message groups**, default flipped true → false: when on, only the first message of a same-sender run (within 5 min) shows avatar and name; the rest render as bubbles only (Discord/Telegram-style). Previously only the avatar was hidden while names and spacing stayed
 - For grouped follow-up messages: the name row is not drawn (saving its height per message), the bubble starts at the row top, horizontal bubble columns stay aligned, and the gap to the previous message tightens to max(2, message_gap/3) (6 → 2px at defaults)
 - Emote and image messages follow the same compact treatment; groups are still broken by system messages and time separators; the avatar's @-mention left-click and right-click context-menu hit regions hide together with the avatar
@@ -456,6 +652,7 @@
 ## v2.4.5
 
 **窗口模式面板宽度上限（三端同步：Fabric / Forge / NeoForge）**
+
 - 窗口模式下聊天面板不再超过窗口宽度的 40%：此前面板按固定物理像素宽渲染（如 1000px），在较小的窗口里会占据大半屏幕（实测 2184px 宽窗口、GUI 缩放 5 时占 66%）；现在自动收缩到 40%，2560 宽全屏下 1000px 面板（39%）不受影响
 - 上限按窗口宽度比例计算，与 GUI 缩放无关；`panel_fullscreen` 铺满模式不受此上限约束
 - 布局单测从 12 例扩到 17 例（窗口占比上限 / 缩放无关性 / 全屏豁免 / 下限优先级）
@@ -463,7 +660,10 @@
 - 修复弹层关闭动画（设置/表情/常用语/搜索）：关闭改为**倒放打开曲线**，与打开方向完全对称（原关闭用另一套缓动、无 ZOOM 回弹，观感像另一种动画且错位）；alpha 低于 0.02 时整层跳绘——修复淡出最后一帧文本/表情突然恢复不透明的闪烁（vanilla `Font.adjustColor` 会把 alpha≤3 的颜色强制为全不透明，面板背景走 SDF 着色器不受影响）
 - Forge/NeoForge 同步修复关闭动画时钟错配：关闭时间戳原来用 `System.currentTimeMillis()` 而进度计算用 `Util.getMillis()`（两个纪元相差约 1.7 万亿 ms，关闭进度恒为 0），导致关闭动画从未真正播放——满透明度冻结 150ms 后瞬间消失；现对齐 Fabric 全链路同钟
 
+----
+
 **Windowed-mode panel width cap (all three loaders: Fabric / Forge / NeoForge)**
+
 - In windowed mode the chat panel no longer exceeds 40% of the window width: the panel previously rendered at a fixed physical pixel width (e.g. 1000px), dominating smaller windows (measured 66% of a 2184px window at GUI scale 5); it now shrinks automatically to 40%, while a 1000px panel on a 2560px fullscreen display (39%) is unaffected
 - The cap is proportional to the window width and independent of GUI scale; the `panel_fullscreen` fill mode is exempt from the cap
 - Layout unit tests expanded from 12 to 17 cases (window cap / scale invariance / fullscreen exemption / floor precedence)
@@ -474,13 +674,17 @@
 ## v2.4.4
 
 **面板限制与像素修复（NeoForge 先行）**
+
 - 面板宽度范围 800–1600 → **400–1600**（默认仍 1000），小窗口也可用细面板
 - 新增客户端配置 `panel_fullscreen`（默认关）：开启后聊天面板铺满整个屏幕宽度、忽略 `panel_width`，侧边栏保留可点
 - 修复面板像素宽不真实的问题：宽度换算改用精确（可能为小数的）GUI 缩放值，不再四舍五入到整数——面板物理宽度现在与窗口 / 缩放无关，改动窗口大小不再漂移或错位（窗口比面板窄时仍夹紧到窗宽）
 - 修复背景模糊（`blur_enabled`）在分数缩放下的错位：模糊区域改用精确缩放换算，与面板矩形严格对齐
 - 新增 `computePanelWidth` 布局单测 12 例（分数缩放精确性 / 全屏铺满 / 小窗口夹紧 / 下限保护）
 
+----
+
 **Panel limits & pixel fix (NeoForge first)**
+
 - Panel width range widened from 800–1600 to **400–1600** (default stays 1000), so small windows can use a narrower panel
 - New client config `panel_fullscreen` (off by default): fills the whole screen width with the chat panel, ignoring `panel_width`, while keeping the sidebar usable
 - Fixed the panel's real width not matching its setting: the width is now converted with the exact (possibly fractional) GUI scale instead of a rounded int — the physical width no longer drifts or misaligns when the window is resized (it still clamps to the window width when the window is narrower)
@@ -490,12 +694,16 @@
 ## v2.4.3-beta
 
 **EasyBot 群消息兼容（NeoForge 先行）**
+
 - 新增服务端配置 `easybot_compat`（默认开）：把 EasyBot 转发进游戏的 QQ 群消息（默认格式 `[群名] <昵称(QQ号)> 内容`）解析为 E33Chat 玩家气泡，不再显示为灰色系统消息；不需要可手动关闭
 - 支持 EasyBot/ChatImage 的 CICode 图片：气泡内可直接显示 QQ 图片卡片（从 SHOW_TEXT hover 里的 `[[CICode,...]]` 提取）
 - 服务端模板新增 `{external}` 占位符：用于“外部/QQ 发送者”，不要求名字能解析为已知玩家；`/e33chat gui` 聊天模板预设区已加入 EasyBot 默认格式，方便服主在 EasyBot 模板被自定义时覆盖
 - README / README_EN 增加 EasyBot 兼容说明
 
+----
+
 **EasyBot group-message compatibility (NeoForge first)**
+
 - New server config `easybot_compat` (on by default): QQ group messages relayed by EasyBot (default format `[Group] <Nick(QQ#)> content`) are parsed as E33Chat player bubbles instead of grey system messages; turn it off if you prefer the old system-message style
 - EasyBot/ChatImage CICode images are supported: QQ images render as cards inside bubbles (extracted from `[[CICode,...]]` in SHOW_TEXT hover)
 - Server templates gained `{external}` for external/QQ senders that do not need to resolve to known players; the `/e33chat gui` chat-template presets now include the EasyBot default format so server owners can override customized EasyBot templates
@@ -504,47 +712,59 @@
 ## v2.4.2
 
 **横幅堆叠机制（三端同步：Fabric / Forge / NeoForge）**
+
 - 通知横幅改为手机式堆叠：新横幅立即出现在最上方，旧横幅 200ms 平滑下移并缩小到 75%，保留头像+标题+首行内容
 - 同时最多显示 3 条（可配置 1–5），满员时最旧一条 150ms 缩小淡出被顶掉，其余自动上移补位
 - 旧横幅被顶下/自然退场都使用平滑动画，新横幅入场仍沿用 SLIDE/FADE/ZOOM/NONE 动画风格；系统横幅也参与同一堆叠
 - 新增配置 `banner_max_stack`（默认 3，范围 1–5）
 
-**Stacked notification banners (all loaders: Fabric / Forge / NeoForge)**
-- Notification banners now stack like phone notifications: new banners appear immediately at the top, older ones smoothly move down over 200ms and shrink to 75%, keeping avatar + title + first content line
-- Up to 3 banners are shown at once (configurable 1–5); when full, the oldest shrinks and fades out over 150ms while the rest slide up to fill
-- Push-down and natural exit animations are smooth; new banner entrance still uses the selected SLIDE/FADE/ZOOM/NONE style; system banners join the same stack
-- Added `banner_max_stack` config (default 3, range 1–5)
-
 **键盘快捷键修复（三端同步：Fabric / Forge / NeoForge）**
+
 - 修复聊天输入框鼠标拖选失效导致 Ctrl+C 无法复制的问题：自定义鼠标点击处理绕过容器事件后，现在会正确设置拖拽状态
 - Ctrl+V 粘贴文本时不再启动后台图片剪贴板探测，避免干扰文本粘贴；剪贴板为图片时仍走图片上传/表情包添加
 
-**Keyboard shortcut fix (all loaders: Fabric / Forge / NeoForge)**
-- Fixed mouse text selection in the chat input being broken (which made Ctrl+C copy nothing) by restoring the container dragging state after custom mouse click handling
-- Ctrl+V with text no longer starts the background image-clipboard probe, so text paste is not disturbed; image clipboard still uploads / adds to the emote pack
-
 **横幅堆叠视觉调整（三端同步：Fabric / Forge / NeoForge）**
+
 - 最新横幅现在会遮住上一条横幅的上半部分，旧横幅只从底部露出一半，更像手机通知堆叠
 
-**Banner stack overlap tweak (all loaders: Fabric / Forge / NeoForge)**
-- The newest banner now covers the top half of the banner below it, so older banners peek out from the bottom like a phone notification stack
-
 **横幅倒计时与音效防重（三端同步：Fabric / Forge / NeoForge）**
+
 - 修复横幅无法消失：每条横幅独立从出现起倒计时，到期后按当前 BANNER_ANIM_STYLE 退场（SLIDE 上滑 / FADE 淡出 / ZOOM 缩小淡出 / NONE 瞬间消失），被顶下不重置计时
 - 通知音效全局 2 秒内只响一次：短时间大量通知时只有第一条响，横幅仍全部正常弹出
 
-**Banner countdown and sound dedupe (all loaders: Fabric / Forge / NeoForge)**
-- Fixed banners never disappearing: each banner counts down independently from appearance and exits with the selected BANNER_ANIM_STYLE (SLIDE up / FADE out / ZOOM shrink-fade / NONE instant); being pushed down does not reset the timer
-- Notification sounds are globally deduplicated to one per 2 seconds: burst notifications only play the first sound while all banners still appear
-
 **文本选择功能（三端同步：Fabric / Forge / NeoForge）**
+
 - 新增鼠标拖选文本：气泡内发送者名字、正文、引用块、系统消息都可逐字符选取，支持跨行/跨消息，Ctrl+C 复制选中内容（行间以换行拼接）
 - 选区高亮按背景亮度自适应：暗背景用半透明白遮罩+黑色选中文字，亮背景用半透明黑遮罩+白色选中文字，不再与蓝色气泡/引用块重色
 - 拖选经过行间空隙时自动吸附最近文本，拖到消息区边缘自动滚动聊天；普通点击仍正常触发链接/指令
 - 聊天主输入框、快捷短语、搜索、侧边栏搜索框均支持鼠标拖选文本
 - 修复滚动条与下栏之间出现间隙的问题：消息底部呼吸空间改为计入内容高度，滚动条轨道仍贴到下栏
 
+----
+
+**Stacked notification banners (all loaders: Fabric / Forge / NeoForge)**
+
+- Notification banners now stack like phone notifications: new banners appear immediately at the top, older ones smoothly move down over 200ms and shrink to 75%, keeping avatar + title + first content line
+- Up to 3 banners are shown at once (configurable 1–5); when full, the oldest shrinks and fades out over 150ms while the rest slide up to fill
+- Push-down and natural exit animations are smooth; new banner entrance still uses the selected SLIDE/FADE/ZOOM/NONE style; system banners join the same stack
+- Added `banner_max_stack` config (default 3, range 1–5)
+
+**Keyboard shortcut fix (all loaders: Fabric / Forge / NeoForge)**
+
+- Fixed mouse text selection in the chat input being broken (which made Ctrl+C copy nothing) by restoring the container dragging state after custom mouse click handling
+- Ctrl+V with text no longer starts the background image-clipboard probe, so text paste is not disturbed; image clipboard still uploads / adds to the emote pack
+
+**Banner stack overlap tweak (all loaders: Fabric / Forge / NeoForge)**
+
+- The newest banner now covers the top half of the banner below it, so older banners peek out from the bottom like a phone notification stack
+
+**Banner countdown and sound dedupe (all loaders: Fabric / Forge / NeoForge)**
+
+- Fixed banners never disappearing: each banner counts down independently from appearance and exits with the selected BANNER_ANIM_STYLE (SLIDE up / FADE out / ZOOM shrink-fade / NONE instant); being pushed down does not reset the timer
+- Notification sounds are globally deduplicated to one per 2 seconds: burst notifications only play the first sound while all banners still appear
+
 **Text selection (all loaders: Fabric / Forge / NeoForge)**
+
 - Added mouse drag selection: sender names, bubble content, quote blocks, and system messages can be selected character-by-character across lines/messages; Ctrl+C copies the selection (lines joined with newlines)
 - Selection highlight adapts to background brightness: dark backgrounds use a light overlay with black selected text, light backgrounds use a dark overlay with white selected text; no more clashing with blue bubbles or quote blocks
 - Dragging through gaps snaps to the nearest text, and dragging near the chat edges auto-scrolls; plain clicks still trigger links/commands
@@ -554,32 +774,38 @@
 ## v2.4.1
 
 **ModernUI emoji 短码支持（三端同步：Fabric / Forge / NeoForge）**
+
 - 聊天输入框里输入 `:pig2:` 等 ModernUI 短码时，现在会随输入实时转换为对应 emoji（仅当 ModernUI 已安装且其 emoji shortcodes 选项开启时；命令输入不转换）
 - 默认表情面板补充猪脸 / 猪 `🐷` `🐖`
 
-**ModernUI emoji shortcode support (all loaders: Fabric / Forge / NeoForge)**
-- Typing ModernUI shortcodes such as `:pig2:` in the chat input now converts them to the matching emoji as you type (only when ModernUI is installed and its emoji shortcodes option is enabled; commands are left untouched)
-- Added pig face / pig `🐷` `🐖` to the default emoji panel
-
 **点击文本下划线修复（三端同步：Fabric / Forge / NeoForge）**
+
 - 只有实际带 clickEvent 的文本才会补下划线，不再因消息里其他段落的点击事件把整行/无关行都划线
 - 修正多样式段下划线映射用错 `i` 下标导致的断线/错位
 
-**Clickable text underline fix (all loaders: Fabric / Forge / NeoForge)**
-- Only text that actually has a click event is underlined; unrelated sibling click events no longer underline whole lines or unrelated segments
-- Fixed the broken/offset underline mapping that used the segment-local `i` index against the global style list
-
 **右键引用在无服务端 E33Chat 时不再阻断发送（三端同步：Fabric / Forge / NeoForge）**
+
 - 服务端未协商 `e33chat:quote_sync` 通道时，右键“引用”不再发送该可选包，聊天消息照常发出，避免 NeoForge `NetworkRegistry.checkPacket` 抛错导致发送中断
 - 服务端装有 E33Chat 时行为不变，引用块照常同步
 
+----
+
+**ModernUI emoji shortcode support (all loaders: Fabric / Forge / NeoForge)**
+
+- Typing ModernUI shortcodes such as `:pig2:` in the chat input now converts them to the matching emoji as you type (only when ModernUI is installed and its emoji shortcodes option is enabled; commands are left untouched)
+- Added pig face / pig `🐷` `🐖` to the default emoji panel
+
+**Clickable text underline fix (all loaders: Fabric / Forge / NeoForge)**
+
+- Only text that actually has a click event is underlined; unrelated sibling click events no longer underline whole lines or unrelated segments
+- Fixed the broken/offset underline mapping that used the segment-local `i` index against the global style list
+
 **Right-click quote no longer blocks sending when the server lacks E33Chat (all loaders: Fabric / Forge / NeoForge)**
+
 - When the server has not negotiated the `e33chat:quote_sync` channel, right-click Quote skips the optional payload and the chat message sends normally, avoiding NeoForge `NetworkRegistry.checkPacket` throwing and interrupting the send
 - Behavior is unchanged on servers with E33Chat installed; quote blocks still sync as before
 
 ## v2.4.0
-
-**v2.4.0 为 2.3.17 全量内容的正式版本号**（2.3.17 曾以四次重发迭代：fix1-fix3、历史存盘异步化、bubble_size、banner_opacity 修正）
 
 **2.3.16 回归修复 + UI 回退 + 新功能 + 性能优化（三端同步：Fabric / Forge / NeoForge）**
 
@@ -607,6 +833,10 @@ UI 回退（2.3.16 风格改动按实机反馈回退，行为不变）：
 **注意**：服务端配置网络包新增字段，客户端与服务端需同时升级，否则打开服务端配置界面会报错。
 
 测试：Forge 310 / NeoForge 309 / Fabric 284 全绿
+
+**v2.4.0 为 2.3.17 全量内容的正式版本号**（2.3.17 曾以四次重发迭代：fix1-fix3、历史存盘异步化、bubble_size、banner_opacity 修正）
+
+----
 
 **2.3.16 regression fixes + UI rollbacks + new features + a performance tweak (all loaders: Fabric / Forge / NeoForge)**
 
@@ -640,6 +870,7 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v2.3.16
 
 **UI 风格统一（00e D1/D2/D07 拍板，三端同步：Fabric / Forge / NeoForge）**
+
 - **视觉 token 最小表（UiTokens）**：2 档圆角（中 8 / 大 16）+ 2 档阴影（面板/弹层）+ 1px 描边 + 基础间距；颜色仍走资源包主题，config 不加颜色项
 - **SDF 圆角覆盖弹层族**：设置菜单 / 表情 / 常用语 / 搜索面板、@提及弹层、右键菜单全部改 SDF 圆角 + 阴影 + 1px 描边（CONTENT_BG/POPUP_BG/CONTEXT_MENU_BG 纹理覆盖对这些弹层不再生效，改由主题语义色驱动）；滚动条按 2.3.13 结论保持纯色填充
 - **组内/组间间距分离**：同一发送者 5 分钟内连续消息间距 = message_gap × 2/3（默认 4）；换人 / 超时 / 系统消息 / 时间分隔 = message_gap × 2（默认 12）。内部比例实现，`message_gap` 键与范围不动
@@ -650,7 +881,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 观感变化：引用块圆角 3→8（token 中档）、弹层打开时长 150→200ms
 - 测试：Forge 313 / NeoForge 312 / Fabric 287 全绿
 
+----
+
 **UI style unification (00e D1/D2/D07, all loaders: Fabric / Forge / NeoForge)**
+
 - **Minimal visual token table (UiTokens)**: 2 corner-radius tiers (medium 8 / large 16) + 2 shadow tiers (panel/popup) + 1px border language + base spacing; colors stay resource-pack themed, no new config color items
 - **SDF rounded corners for the popup family**: settings/emoji/quick-chat/search panels, the @mention popup and context menus now render with SDF radius + popup shadow + 1px border (CONTENT_BG/POPUP_BG/CONTEXT_MENU_BG texture overrides no longer affect these popups - semantic theme colors are used instead); scrollbar stays plain fill (2.3.13 finding)
 - **In-group vs section message spacing**: consecutive same-sender messages within 5 minutes use message_gap x 2/3 (default 4); sender change / timeout / system messages / time separators use message_gap x 2 (default 12). Internal ratio - the message_gap key and range are untouched
@@ -664,6 +898,7 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v2.3.15
 
 **结构重构 + 服务端配置收拢（三端同步：Fabric / Forge / NeoForge）**
+
 - **配置屏 OptionDef 注册表**：GUI 行 / 退出回滚快照 / 色板点击全部由注册表派生，删手写清单（toml 键名/默认值/范围红线不动）
 - 快照缺口修复：`message_gap` / `avatar_size` 现在退出时正确回滚（2.3.13 起有 GUI 行但漏进 snapshotAll）
 - `resolveOnlinePlayer` 改名（行为不变）
@@ -673,7 +908,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 测试：Forge 303 / NeoForge 302 / Fabric 277 全绿
 - 性能：D3 定口径 + 基线记录表（`docs/11-perf-baseline.md`），本版不做优化
 
+----
+
 **Structure refactor + server-config consolidation (all loaders: Fabric / Forge / NeoForge)**
+
 - **OptionDef registry for the client config screen**: GUI rows, exit-rollback snapshot and palette clicks all derive from one registry; hand-written lists removed (toml keys/defaults/ranges untouched)
 - Snapshot gap fix: `message_gap` and `avatar_size` now roll back on Exit like every other row (they had GUI rows but were missing from snapshotAll since 2.3.13)
 - `resolveOnlinePlayer` rename (no behavior change)
@@ -686,6 +924,7 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v2.3.14
 
 **纯结构重构（行为零变化，三端同步：Fabric / Forge / NeoForge）**
+
 - 包结构领域化：ui / compat / render / network / server / config / store 共 13 个子包，根包只剩入口类
 - ChatMessageStore 拆解（1374→926 行）：BlockList / HistoryStore / EchoTracker + wither 助手
 - ChatListenerMixin 薄壳化（782→295 行）：新增 chat/capture 六守卫；~50×2 行复制粘贴收敛
@@ -694,7 +933,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 测试：网络包 round-trip 15 例 + WhisperSignal 3 例首次守护包格式；Forge 302 / NeoForge 302 / Fabric 276 全绿
 - 兼容性：配置键 / 网络包 / 文件格式 / mixin 注入点零改动
 
+----
+
 **Pure-structure refactor (zero behavior change, all loaders: Fabric / Forge / NeoForge)**
+
 - Domain packages: ui / compat / render / network / server / config / store (13 subpackages); only entry classes remain at the root
 - ChatMessageStore split (1374→926 lines): BlockList / HistoryStore / EchoTracker + wither helpers
 - ChatListenerMixin slimmed (782→295 lines): six chat/capture guards; duplicated ~50×2 block merged
@@ -703,25 +945,30 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - Tests: packet round-trip (15) + WhisperSignal (3) now guard the wire format; Forge 302 / NeoForge 302 / Fabric 276 green
 - Compatibility: config keys / packet wire format / file formats / mixin injection points unchanged
 
-
 ## v2.3.13
 
 **新功能（2.3.13，三端同步：Fabric / Forge / NeoForge）**
+
 - **外观快照化**：聊天界面颜色统一为「外观快照」取色入口（Appearance），渲染层不再散落硬编码取色
 - **消息间距 / 头像大小可调**：新增「消息间距」（聊天框 → 消息显示）与「头像大小」（聊天框 → 面板，12–32 像素）；头像大小同时作用于布局与渲染尺寸
 - **服务端图片托管开关**：服务端配置界面「常规」分类新增「服务端图片托管」开关（默认开）；关闭后图片不进服务端，只能走第三方图床（此前只能手改配置文件）
 
-**New (2.3.13, all loaders: Fabric / Forge / NeoForge)**
-- **Appearance snapshot**: chat UI colors unified behind an appearance snapshot entry point; renderers no longer read scattered hardcoded values
-- **Configurable message gap & avatar size**: new "Message Gap" (Chat → Message Display) and "Avatar Size" (Chat → Panel, 12–32 px) options; avatar size affects both layout and render size
-- **Server media hosting toggle**: the server-config GUI's General tab gains a "Server Media Hosting" toggle (default on); off = images never reach the server and go through the third-party host only (previously config-file only)
-
 **修复（2.3.13 补发，三端同步）**
+
 - 上下栏背景：渐显渐隐改为线性曲线（150ms，跟面板开合动画同步）——此前 easeOutCubic 前 75ms 就接近不透明，观感为"瞬间出现/消失"
 - 滚动条渐显修复（此前只显示最后一帧）：改用纯色填充渲染，绕开消息渲染路径的 blend/flush 状态污染；明/暗主题色保留
 - 滚动后滚动条短暂保持显示恢复正常（时间戳时钟错配修复）
 
+----
+
+**New (2.3.13, all loaders: Fabric / Forge / NeoForge)**
+
+- **Appearance snapshot**: chat UI colors unified behind an appearance snapshot entry point; renderers no longer read scattered hardcoded values
+- **Configurable message gap & avatar size**: new "Message Gap" (Chat → Message Display) and "Avatar Size" (Chat → Panel, 12–32 px) options; avatar size affects both layout and render size
+- **Server media hosting toggle**: the server-config GUI's General tab gains a "Server Media Hosting" toggle (default on); off = images never reach the server and go through the third-party host only (previously config-file only)
+
 **Fixes (2.3.13 hotfix, all loaders)**
+
 - Title/bottom bar fade: linear curve (150ms, synced with the panel animation) — the previous easeOutCubic reached ~87% opacity within the first 75ms and looked like an instant pop-in/out
 - Scrollbar fade-in fixed (it used to show only the final frame): now rendered with solid fill to bypass blend/flush state pollution from the message render path; dark/light theme colors preserved
 - Scrollbar now stays visible briefly after scrolling (clock mismatch fix)
@@ -729,6 +976,7 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v2.3.12
 
 **新功能（2.3.12，三端同步：Fabric / Forge / NeoForge）**
+
 - **自定义表情包**：表情面板新增「表情包」标签页，从 `config/e33chat/emotes/` 目录加载最多 10 个表情图片（png/jpg/gif 首帧）；点击表情立即发送（无气泡小图）；悬停显示删除角标；点「+」打开系统文件选择器添加；表情标签页打开时 Ctrl+V 直接把剪贴板图片加入表情包
 - **图片消息无气泡化**：所有图片消息改为无气泡渲染（保留头像与昵称），图片按真实尺寸缩放（小图不放大、大图按面板宽度自适应，窄窗口不再溢出）；多图纵向堆叠；点击图片打开原图 URL，悬停显示链接
 - **图床切换**：默认图床上传从 Litterbox 改为 uguu.se——Litterbox 的下载 CDN 在部分网络不可达（图传得上去但永远加载不出来），uguu.se 上传/下载全链路可达；自定义图床的响应解析新增 JSON 路径语法（如 `json:files[0].url`）
@@ -736,15 +984,8 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - **配置修复**：音量 0（静音）/面板透明度 0/圆角 0 等合法设置不再被重置为默认值；配置写入改为原子替换（游戏崩溃不再损坏配置文件，损坏文件保留 .bak 供恢复）
 - **配置目录**：客户端配置统一到 `config/e33chat/e33chat-client.toml`（Forge / NeoForge）与 `config/e33chat/e33chat-client.json`（Fabric），旧路径自动迁移，设置不丢；聊天历史仍在 `runDir/e33chat/history/`
 
-**New (2.3.12, all loaders: Fabric / Forge / NeoForge)**
-- **Custom emote pack**: the emoji panel gains an "Emote Pack" tab loading up to 10 images from `config/e33chat/emotes/` (png/jpg/gif first frame); clicking an emote sends it immediately as a bubble-less small image; hover shows a delete badge; the "+" slot opens the OS file picker; with the emote tab open, Ctrl+V adds the clipboard image to the pack
-- **Bubble-less image messages**: image messages now render without a bubble (avatar + name kept), scaled to their real size (small images never upscaled, large images clamped to the panel width); multiple images stack vertically; clicking an image opens the original URL, hover shows it
-- **Default image host switched**: uploads now go to uguu.se by default — Litterbox's download CDN is unreachable on some networks (uploads succeed but the image can never load), uguu.se is reachable end-to-end; custom hosts gain JSON path response parsing (e.g. `json:files[0].url`)
-- **Upload pipeline rework**: uploads queue and run serially (up to 8), and one Enter press is enough — the message sends automatically once the upload finishes; failed uploads restore the input text so you can retry
-- **Config fixes**: zero values (muted volume / fully transparent panel / square corners) are no longer reset to defaults; config writes are atomic (a crash can no longer corrupt the file, and a corrupt file is kept as .bak)
-- **Config dir**: client config unified to `config/e33chat/e33chat-client.toml` (Forge / NeoForge) and `config/e33chat/e33chat-client.json` (Fabric), auto-migrated from legacy paths, nothing lost; chat history stays in `runDir/e33chat/history/`
-
 **修复（2.3.12 补发）**
+
 - 修复服务器媒体直传单块图（<512KB）永不回执、客户端上传挂起 30 秒
 - 修复上传 worker 异常卡死队列、上传中提示样式错位
 - 修复原版聊天框把图片代码渲染成长 URL 刷屏（改为绿色 `[图片]` 占位符）
@@ -756,7 +997,19 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 服务器媒体直传加每玩家限速（10 秒 4 次）；剪贴板图片解码移出渲染线程
 - `[引用]`/`[私聊]` 原版标签改走本地化；图床文档对齐 uguu.se、删除失效配置说明
 
+----
+
+**New (2.3.12, all loaders: Fabric / Forge / NeoForge)**
+
+- **Custom emote pack**: the emoji panel gains an "Emote Pack" tab loading up to 10 images from `config/e33chat/emotes/` (png/jpg/gif first frame); clicking an emote sends it immediately as a bubble-less small image; hover shows a delete badge; the "+" slot opens the OS file picker; with the emote tab open, Ctrl+V adds the clipboard image to the pack
+- **Bubble-less image messages**: image messages now render without a bubble (avatar + name kept), scaled to their real size (small images never upscaled, large images clamped to the panel width); multiple images stack vertically; clicking an image opens the original URL, hover shows it
+- **Default image host switched**: uploads now go to uguu.se by default — Litterbox's download CDN is unreachable on some networks (uploads succeed but the image can never load), uguu.se is reachable end-to-end; custom hosts gain JSON path response parsing (e.g. `json:files[0].url`)
+- **Upload pipeline rework**: uploads queue and run serially (up to 8), and one Enter press is enough — the message sends automatically once the upload finishes; failed uploads restore the input text so you can retry
+- **Config fixes**: zero values (muted volume / fully transparent panel / square corners) are no longer reset to defaults; config writes are atomic (a crash can no longer corrupt the file, and a corrupt file is kept as .bak)
+- **Config dir**: client config unified to `config/e33chat/e33chat-client.toml` (Forge / NeoForge) and `config/e33chat/e33chat-client.json` (Fabric), auto-migrated from legacy paths, nothing lost; chat history stays in `runDir/e33chat/history/`
+
 **Fixes (2.3.12 respin)**
+
 - Fixed single-chunk server media uploads (<512KB) never acking, hanging the client for 30s
 - Fixed the upload worker crashing the queue, and the upload-in-progress hint styling
 - Fixed the vanilla chat rendering image codes as a long URL (now a green `[Image]` placeholder)
@@ -771,22 +1024,28 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v2.3.11
 
 **新功能（2.3.11）**
+
 - **本地图片上传**：聊天输入框旁的上传按钮 / Ctrl+V 粘贴 / **直接拖图片进窗口**，自动缩放到 ≤2048 边长并重新编码，上传到图床（默认 Litterbox，可配置），插入 `[[CICode,url=...]]` 发送；上传失败有提示，不会插入死链接
 - **服务端媒体直传**：当服务器也装了 e33chat 时，聊天图片直接存到服务器（`e33chat://media/<id>`，永久不过期），不再受第三方图床 72h 过期限制；服务器没装/未开启时自动回退图床，无感。服务端配置 `media_enabled`（默认 true）控制；单文件上限 8MB、总配额 512MB、随机 UUID 媒体 ID 防遍历；能力探测走独立协议类型，新旧客户端/服务端混用不炸
 - **图片渲染升级**（继承 2.3.10 管线）：无卡片背景/边框，图片直接绘制在气泡上，上边缘与文本齐平，图间 2px 间隙
 
 **修复（2.3.11）**
+
 - 修复 Litterbox 上传 HTTP 412（缺 `reqtype=fileupload`，旧配置自动注入）
 - 修复拖拽图片后输入框键盘失效（OS 拖放抢焦点，自动归还）
 - 修复 chatimage 等 mod 在拖拽/粘贴时插入的本地 `file://` 死链：e33chat 上传完成后自动替换为真实 URL；file:// 未替换时按回车会阻止发送并提示「图片上传中」，同时自动开始上传
 - 修复点击 file:// 图片消息抛 URISyntaxException（仅 http(s) 链接响应点击）
 
+----
+
 **New (2.3.11)**
+
 - **Local image upload**: upload button / Ctrl+V paste / **drag & drop onto the window**, auto-scaled to ≤2048px and re-encoded, uploaded to a host (default Litterbox, configurable), inserted as `[[CICode,url=...]]`; failures show a hint and never insert dead links
 - **Server-side media hosting**: when the server also runs e33chat, chat images are stored on the server (`e33chat://media/<id>`, permanent) instead of the third-party host's 72h expiry; falls back to the host automatically when the server lacks/disabled it. Toggle `media_enabled` (default true); 8MB/file, 512MB quota, random UUID media IDs; capability detection uses a separate protocol type so mixed client/server versions never desync
 - **Image rendering upgrade** (on the 2.3.10 pipeline): no card background/border, drawn directly on the bubble, top edge flush with text, 2px gap between images
 
 **Fixes (2.3.11)**
+
 - Fixed Litterbox upload HTTP 412 (missing `reqtype=fileupload`; legacy configs get it injected)
 - Fixed chat input keyboard dying after dragging an image (OS drop steals focus; now returned)
 - Fixed dead `file://` links inserted by mods like chatimage on drag/paste: e33chat replaces them with the real upload URL once done; pressing Enter before the replacement blocks the send with a "wait" hint and auto-starts the upload
@@ -795,140 +1054,108 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v2.3.10
 
 **新功能（2.3.10）**
+
 - **气泡内图片渲染（三端）**：聊天消息里的 `[[CICode,url=...]]`（ChatImage 协议）和 `[[ChatUpgrade,url=...,type=image]]`（第三方富文本协议）图片代码现在直接在气泡内原生渲染成图片卡片——不依赖任何 mod，协议层与 ChatImage 等第三方 mod 互通（它们发的图我们能显示，我们发的代码它们也能解析）。历史记录里的旧图片消息（含 ChatImage 转换前的样式组件）自动兼容，重进存档后图片重新加载显示。点击图片卡片用系统浏览器打开原图，悬停显示完整 URL
 - **图片防刷屏（三端）**：聊天图片下载入口是攻击者可控制的，内置三层防护——滑动窗口限流（10 秒最多 4 个新下载，超出的排队，队列满则显示"限流"占位）+ 64 条 LRU 缓存（逐出时销毁 GPU 纹理）+ 上传前等比缩放到 ≤320×180（恶意 16MB 大图只占约 230KB 显存）。下载失败 10 秒后自动重试
 - **接收图片开关（三端）**：设置界面「聊天」标签新增「接收图片」开关（默认开）。关闭后图片代码显示为纯文本 `[图片]`，不发起任何下载
 
 **修复（2.3.10）**
+
 - **图标/标题文字被面板透明度调制变浅（三端，2.3.7 回归）**：2.3.7 动画更新把 `panelOpacity`（默认 0.8）误当作图标和文字的 alpha——四个图标（菜单/设置/表情/发送）和标题栏文字被永久调制到 80% 不透明度，浅色主题下明显比 PNG 原色浅。现在内容（图标/文字）只跟随面板开合动画，动画结束后 100% 原色；面板透明度只管背景
 - **JPEG/GIF 图片红蓝互换（三端）**：AWT 解码的非 PNG 图片像素按 ARGB 字节序写入 NativeImage 的 ABGR 内存布局，红色和蓝色通道互换。已按 ABGR32 布局转换，JPEG/GIF/BMP 图片颜色正确
 
+----
+
 **New (2.3.10)**
+
 - **Native image rendering in bubbles (all platforms)**: `[[CICode,url=...]]` (ChatImage protocol) and `[[ChatUpgrade,url=...,type=image]]` (third-party rich-message protocol) codes now render as image cards directly inside chat bubbles with zero mod dependencies — protocol-level interop with ChatImage and other third-party mods (their images display in our bubbles, our codes parse in theirs). Legacy history lines (ChatImage-converted styled components) are extracted automatically and re-downloaded on world re-entry. Clicking a card opens the original URL in the system browser, hovering shows the full URL
 - **Image anti-flood (all platforms)**: chat images are an attacker-controlled download trigger, so three layers of protection are built in — sliding-window rate limit (max 4 new downloads per 10s, excess queued, queue-full renders a "rate limited" placeholder) + 64-entry LRU cache (GPU textures destroyed on eviction) + pre-upload scaling to ≤320×180 (a hostile 16MB image costs ~230KB of VRAM). Failed downloads auto-retry after 10 seconds
 - **Receive-images toggle (all platforms)**: new "Receive images" switch in the config screen's Chat tab (default on). When off, image codes render as plain `[Image]` text and nothing is ever downloaded
 
 **Fixes (2.3.10)**
+
 - **Icons/title text tinted by panel opacity (all platforms, 2.3.7 regression)**: the 2.3.7 animation update fed `panelOpacity` (default 0.8) into the icon/text alpha — the four icons (menu/settings/emoji/send) and title-bar text rendered permanently 80% opaque, visibly lighter than the PNG colour on light themes. Content (icons/text) now follows only the panel open/close animation and returns to 100% original colour afterwards; panel opacity affects the background only
 - **JPEG/GIF images rendered with red and blue swapped (all platforms)**: AWT-decoded non-PNG pixels were written as big-endian ARGB into NativeImage's ABGR memory layout, swapping the R and B channels. Pixels are now converted to ABGR32, so JPEG/GIF/BMP colours are correct
 
 ## v2.3.9
 
 **修复（2.3.9）**
+
 - **聊天记录纯文本问题（三端）**：历史记录此前存为纯文本 TSV（v2.2.3 起为可读日志而有意降级）——重进存档后聊天记录只剩文本，颜色/点击事件/悬停提示/下划线全部丢失，头像也无法按玩家解析。现在历史改为 JSONL 完整组件：`senderJson`/`contentJson` 用原版组件序列化保存（颜色/click/hover 完整保留），并新增 `uuid` 列持久化发送者 UUID——重进存档后离线玩家头像按 UUID 正确解析（在线玩家走 Tab，离线走正版皮肤服务）。旧格式（纯文本行/旧 JSON/旧 JSONL）自动兼容读取
 - **离线玩家头像默认脸问题（三端）**：历史消息重载后发送者 UUID 丢失时头像回落为 Steve/Alex。现在头像查询新增按名字的常驻缓存：在线见过的玩家即使离线（UUID 查不到/盗版服）也能复用其真实皮肤；结合 UUID 持久化，正版离线玩家直接经皮肤服务解析
 
+----
+
 **Fixes (2.3.9)**
+
 - Chat history lost all styling (all three platforms): history was stored as plain-text TSV (deliberately downgraded in v2.2.3 for human-readable logs), so after re-entering a world the history showed bare text — colors, click events, hover tooltips and underlines were gone, and avatars couldn't resolve to the real player. History is now JSONL with full components: `senderJson`/`contentJson` are serialized with the vanilla component codec (colors/click/hover fully preserved), plus a new `uuid` column persisting the sender UUID — after re-entering, offline players' avatars resolve correctly by UUID (online via the tab list, offline via the skin service). Old formats (plain-text lines / legacy JSON / legacy JSONL) still load automatically
 - Offline players showed Steve/Alex avatars (all three platforms): reloaded history without a sender UUID fell back to the default skin. Avatar lookup now has a name-keyed persistent cache: players you've seen online keep their real skin even offline (UUID lookup failure / cracked servers), and with UUID persistence, offline players on online-mode servers resolve straight from the skin service
 
 ## v2.3.8
 
-
 **修复（2.3.8）**
+
 - **tpa 请求被误判为私聊（三端）**：whisper 检测词表里的裸 "to you" 太宽松——"wants to teleport to you"（Essentials 系 tpa 请求）恰好含 "to you"，被误判成私聊：`[Essentials]` 前缀被剥、渲染成私聊玩家气泡、触发私聊横幅、`[Yes]/[No]` 按钮样式丢失。现在裸 "to you" 不再算私聊词（真私聊由 whisper/悄悄/对你说/PM 词表覆盖），tpa 请求正确显示为系统消息；echo 抑制误判（对方请求刚好在 /msg 某人之后到达，被当成自己回显吞掉）同步消除
 - **长系统消息文本重叠（Forge/Neo）**：系统消息高度计算用 999 宽度（几乎不换行→按 1 行算），实际绘制用面板内宽（长文本画 2-3 行）——高度预算不足，下一条消息压上来重叠。现在高度计算与绘制同宽（`panelW - PAD*2 - 20`），每条系统消息独立占行不再互相覆盖
 
+----
+
 **Fixes (2.3.8)**
+
 - tpa requests misread as private messages (all three platforms): the bare "to you" keyword in the whisper detector was too loose — "wants to teleport to you" (Essentials-style tpa requests) contains it and was claimed as a whisper: the `[Essentials]` prefix was stripped, the message rendered as a private-player bubble, a whisper banner fired and the `[Yes]/[No]` buttons lost their styling. Bare "to you" is no longer a whisper keyword (real whispers are covered by whisper/悄悄/对你说 and the PM word list); tpa requests now show as system messages, and the echo-suppression misread (a request arriving right after you /msg someone was suppressed as your own echo) is gone with it
 - Long system messages overlapped (Forge/Neo): the height computation wrapped content at width 999 (nearly one line) while rendering wrapped at the panel-inner width (2-3 lines) — the height budget fell short and the next message drew on top. Height now uses the same wrap width as rendering (`panelW - PAD*2 - 20`), so each system message occupies its own rows
 
 ## v2.3.7
 
-## v2.3.7
-
 **修复（2.3.7 补发 9）**
+
 - **横幅头像不随横幅淡入（三端）**：横幅 FADE 动画时背景/文字淡入、头像瞬间出现——头像用 `setShaderColor` 包 `blit`（对 `POSITION_TEX` 无效）。头像改 `drawWithAlpha` 随横幅一起淡入
 - **右键菜单/提及弹窗/回复栏/通知栏/私聊条不随面板淡入（三端）**：这些元素在面板 FADE 打开时背景/边框/图标瞬间实心出现（vanilla `blit` 不吃 `setShaderColor`）。全部改 `drawWithAlpha`（+ 边框 alphaBlend、图标走带 alpha 路径），面板 FADE/ZOOM 时与整体一起淡入/缩放
 
-**Fixes (2.3.7 follow-up 9)**
-- Banner avatar didn't fade with the banner (all three platforms): under FADE the background/text faded in but the avatar popped in — it used `setShaderColor` around `blit` (ineffective for `POSITION_TEX`). The avatar now uses `drawWithAlpha` and fades in with the banner
-- Context menus / mention popup / reply bar / notification bar / whisper bar didn't follow the panel fade (all three platforms): their backgrounds/borders/icons popped in solid under FADE (vanilla `blit` ignores `setShaderColor`). All switched to `drawWithAlpha` (borders via alphaBlend, icons via the alpha path), so they fade/scale with the panel
-
-## v2.3.7
-
 **修复（2.3.7 补发 8）**
+
 - **上下栏/侧边栏无法淡入（Forge/Neo，Fabric 上下栏已修）**：`ChatBars` 用 `setShaderColor(1,1,1,alpha)` 包 vanilla `blit`——但 `blit` 走 `POSITION_TEX` 着色器（顶点只有位置+UV，无颜色通道），alpha 对背景纹理完全无效，只有文字（独立管线 alphaBlend）能淡。现在 Forge/Neo 上下栏背景/边框/图标全部改 `drawWithAlpha`（带颜色通道的渲染路径），对齐 Fabric
 - **侧边栏淡入无效（三端）**：侧边栏的 `fadeSidebar` 也是 `setShaderColor` 包整个侧边栏——内部全是无颜色通道的 `drawTexture`/`blit`，背景/头像/图标从不淡，只有位移停住。现在侧边栏渲染加 `float alpha` 参数，背景/选中/悬停/图标/玩家头像全部走带 alpha 路径——FADE 下侧边栏真正原地淡入，ZOOM 下缩放+淡入与面板节奏一致
 - **消息气泡头像不随消息淡入（三端）**：消息进入动画淡入时头像用 `setShaderColor` 包 `blit`（无效），头像瞬间显示。现在头像改 `drawWithAlpha`，随气泡一起淡入
 
-**Fixes (2.3.7 follow-up 8)**
-- Title/bottom bar couldn't fade on Forge/Neo (Fabric's bars were already fixed): `ChatBars` wrapped vanilla `blit` with `setShaderColor(1,1,1,alpha)`, but `blit` uses the `POSITION_TEX` shader (vertices carry position+UV only, no color channel), so the alpha never reached the background textures — only text (its own alphaBlend pipeline) faded. The bars' backgrounds/borders/icons now use `drawWithAlpha` (the color-channel path), matching Fabric
-- Sidebar fade didn't work (all three platforms): `fadeSidebar` also wrapped the whole sidebar in `setShaderColor`, but internally it drew with color-less `drawTexture`/`blit` — the background/avatar/icons never faded, only the offset stopped. The sidebar render now takes a `float alpha` and draws its background/selection/hover/icons/player-heads through the alpha path — under FADE it truly fades in place, and under ZOOM it scales + fades in sync with the panel
-- Message-bubble avatars didn't fade with the message (all three platforms): the enter-animation avatar used `setShaderColor` around `blit` (ineffective), so it popped in. Avatars now use `drawWithAlpha` and fade in with the bubble
-
-## v2.3.7
-
 **修复（2.3.7 补发 7）**
+
 - **FADE 面板下汉堡切换侧边栏无动画（三端）**：点汉堡切换侧边栏时，面板风格为 FADE 时 `fadeSidebar` 判定未区分"面板开合动画"与"汉堡切换"——它只看面板风格不看 `sidebarAnimating`，强制侧边栏位移为 0（slide 进度被丢弃），透明度又用面板开合进度（此时早已结束 = 1，淡入也没有）→ 侧边栏完全静止。修复：`fadeSidebar` 仅在面板自己的开合动画时生效，汉堡切换永远滑动（与 ZOOM/SLIDE 面板下行为一致）
 
-**Fixes (2.3.7 follow-up 7)**
-- Sidebar toggle had no animation under a FADE panel (all three platforms): the `fadeSidebar` check only looked at the panel style, not whether a hamburger toggle was animating — under FADE it forced the sidebar offset to 0 (dropping the slide progress) and used the panel's own open/close progress for alpha (already finished = 1, so no fade either), leaving the sidebar completely static. Fixed: `fadeSidebar` now applies only to the panel's own open/close animation; the hamburger toggle always slides (matching the ZOOM/SLIDE behavior)
-
-## v2.3.7
-
 **修复（2.3.7 补发 6）**
+
 - **Fabric 侧边栏在 SLIDE 下不跟随面板滑动**：`getSidebarAnimProgress` 分支写反——侧边栏开启时直接返回 1f（原地不动），面板却还在滑动，SLIDE 下面板与侧边栏割裂。修复：对齐 Forge/Neo 的判定（侧边栏未开返回 0，开启时跟随面板开合动画进度），SLIDE 下侧边栏与面板一体滑动
 - **NeoForge mod 列表描述乱码（仅 NeoForge）**：`gradle.properties` 的 `mod_description` 中文部分 UTF-8 尾字节损坏，游戏内 mod 列表显示乱码。修复：统一为与 Forge/Fabric 一致的纯英文描述
 
-**Fixes (2.3.7 follow-up 6)**
-- Fabric sidebar no longer detached under SLIDE: `getSidebarAnimProgress` had an inverted branch — with the sidebar open it returned 1f (fixed in place) while the panel kept sliding, so the panel and sidebar split under SLIDE. Fixed to match Forge/Neo (0 when closed, follow the panel's open-animation progress when open); the sidebar now slides as one unit with the panel under SLIDE
-- NeoForge mod-list description was garbled (NeoForge only): the Chinese part of `mod_description` in `gradle.properties` had a corrupted UTF-8 trailing byte, showing mojibake in-game. Fixed: unified to the same plain-English description as Forge/Fabric
-
-## v2.3.7
-
 **修复（2.3.7 补发 5）**
+
 - **Fabric 打开聊天框时面板被 slide 污染（仅 Fabric）**：Fabric 的 `init()` 在侧边栏开启时强制 `sidebarAnimating = true`，每帧把侧边栏滑动进度写进 `panelX`（所有面板内容的布局左边界），FADE/ZOOM 下面板矩阵不位移、但内容被 `panelX` 拖着水平滑动——叠成 slide + fade/zoom。Forge/Neo 的 `init()` 是 `sidebarAnimating = false`（侧边栏直接就位），从根上没有污染。修复：Fabric `init()` 对齐 Forge/Neo。**侧边栏的进入动画本就由面板开合动画承载**（打开=FADE 原地淡入 / ZOOM 缩放 / SLIDE 一起滑），不需要侧边栏状态机在打开时重新驱动
 - **侧边栏搜索框位置（三端）**：打开聊天框时搜索框初始 `setX(2 - SIDEBAR_W)` 藏在屏幕外（原为配合侧边栏滑入动画），但打开方向侧边栏不走自己动画、进入动画由面板承载——Forge/Neo 下搜索框停在屏幕外不可点、不可见。修复：初始直接就位 `setX(2)`
 
-**Fixes (2.3.7 follow-up 5)**
-- Fabric panel content no longer slides under FADE/ZOOM when opening the chat (Fabric only): `init()` force-set `sidebarAnimating = true` with the sidebar open, and the tick wrote the sidebar slide progress into `panelX` — the layout origin of all panel content — so the whole panel slid horizontally under FADE/ZOOM (no matrix displacement). Forge/Neo never had this: their `init()` leaves `sidebarAnimating = false`. Fixed: Fabric `init()` now matches Forge/Neo. The sidebar's entrance is carried by the panel's open animation (FADE fades in place / ZOOM scales / SLIDE slides together); the sidebar state machine shouldn't re-drive it when the screen opens
-- Sidebar search box position (all three platforms): it was initialized at `setX(2 - SIDEBAR_W)` (off-screen, for the sidebar's own slide-in) but the sidebar no longer plays its own animation on open — on Forge/Neo it stayed off-screen, invisible and unclickable. Fixed: initialized at `setX(2)`
-
-## v2.3.7
-
 **修复（2.3.7 补发 4）**
+
 - **侧边栏开启时面板背景 FADE/ZOOM 下滑入**：侧边栏开启时面板背景左缘按动画进度从屏幕左缘水平长到侧边栏右缘（原为配合 SLIDE 面板滑入），但 FADE/ZOOM 下 `panelOffset` 无位移，只有背景还在水平生长——叠成"slide + fade/zoom"两重效果。现在只有 SLIDE 时背景才水平生长；FADE/ZOOM 时背景固定画在面板区原地淡入/缩放，与侧边栏一起作为整体
 
-**Fixes (2.3.7 follow-up 4)**
-- Panel background no longer slides in under FADE/ZOOM when the sidebar is open: its left edge grew from the screen's left edge to the sidebar's right edge (designed for the SLIDE panel), but under FADE/ZOOM the panel doesn't move — only the background did, stacking slide + fade/zoom. The background now only grows under SLIDE; under FADE/ZOOM it stays in the panel region and fades/scales in place with the sidebar as one unit
-
-## v2.3.7
-
 **修复（2.3.7 补发 3）**
+
 - **ZOOM 下面板与侧边栏割裂**：面板 ZOOM 缩放时侧边栏仍保留水平位移，与缩放矩阵叠加成"滑动+缩放"两重效果。现在侧边栏去掉位移，与面板一起绕面板中心缩放 + 同步淡入，成为整体
 - **FADE 下侧边栏切换无动画**：点汉堡切换侧边栏开关时，FADE/NONE 进度被短路成 0/1，切换瞬间无任何动画。现在汉堡切换永远走滑动动画（侧边栏是独立个体，切换动画不随面板动画风格）
 
-**Fixes (2.3.7 follow-up 3)**
-- Sidebar no longer slides under panel ZOOM: it kept its horizontal offset while the panel scaled, stacking slide + zoom. It now drops the offset and scales with the panel around the panel center, fading in sync
-- Sidebar toggle had no animation under FADE: the FADE/NONE progress shortcut snapped to 0/1, so the hamburger toggle was instant. The toggle now always slides, independent of the panel animation style
-
-## v2.3.7
-
 **修复（2.3.7 补发 2）**
+
 - **弹层 SLIDE 上滑+淡入（三端）**：此前弹层 SLIDE 与 FADE 效果几乎一样（只有淡入、无位移），预期是从下往上滑入。现在 SLIDE 弹出时上滑 10px + 淡入
 - **侧边栏 FADE 关闭方向走滑动**：面板 FADE 关闭时侧边栏仍硬编码向左滑出（关闭分支绕过了动画风格分派，只有打开方向是原地淡入）。现在 FADE 下关闭方向同样原地淡出
 - **侧边栏 ZOOM 不跟随面板**：ZOOM 的缩放矩阵只包住聊天面板，侧边栏在矩阵外永远走滑动，与面板割裂。现在侧边栏并入面板缩放矩阵，一起绕面板中心缩放弹入
 
-**Fixes (2.3.7 follow-up 2)**
-- Popup SLIDE now rises up 10px while fading in (all three platforms): previously SLIDE looked almost identical to FADE (fade only, no displacement)
-- Sidebar FADE closing no longer slides out: the closing branch hard-coded the slide offset and bypassed the animation-style dispatch (only the opening direction faded in place). It now fades in place in both directions
-- Sidebar ZOOM now scales with the panel: the ZOOM matrix only wrapped the chat panel, so the sidebar (outside the matrix) always slid and looked detached. It is now inside the same matrix, zooming around the panel center
-
 **新功能**
+
 - **UI 多风格动画（三端）**：此前聊天界面/横幅/弹层只有一种滑入滑出动画，且缓动曲线写死在代码里。现在每个元素可独立选择动画风格：`滑动`（保持原有滑入滑出）、`淡入淡出`（仅透明度，vanilla Toast 同款 quad 曲线）、`缩放弹入`（绕中心缩放 + 过冲回弹）、`无动画`（关闭该元素动画）
 - **消息条目进入动画（三端，默认开启）**：新消息气泡出现时上滑 8px + 淡入（250ms），连续多条消息逐条交错 40ms 延迟——聊天界面更有"消息流"的层次感
 - **弹层弹出动画（三端，默认开启）**：设置/表情/快捷/搜索面板弹出时淡入或缩放弹入（关闭保持即时）
 - **新配置项 ×4**：`panel_anim_style`（面板，默认滑动）/ `banner_anim_style`（横幅，默认滑动）/ `popup_anim_style`（弹层，默认淡入淡出）/ `message_anim_style`（消息，默认淡入淡出），设置界面循环按钮切换；全局"动画"总开关仍然有效
 
-**Fixes**
-- Multi-style UI animations (all three platforms): the chat panel/banner/popups previously had a single slide-in animation with hard-coded easing. Each element now picks its own style independently: Slide (original), Fade (opacity only, vanilla-toast quad easing), Zoom (scale-in around center with overshoot), or None
-- Message enter animation (all three platforms, on by default): new bubbles slide up 8px + fade in over 250ms, staggered 40ms between consecutive messages
-- Popup open animation (all three platforms, on by default): settings/emoji/quick-chat/search panels fade or zoom in when opened (closing stays instant)
-- New settings ×4: `panel_anim_style` / `banner_anim_style` / `popup_anim_style` / `message_anim_style`, cycled via buttons in the config screen; the global "Animation" toggle still applies
-- Tests: Forge 241 / NeoForge 241 / Fabric 222 all green
-
 **修复（2.3.7 补发）**
+
 - **消息动画三风格（三端）**：此前消息进入动画只有上滑+淡入一种效果（三种风格视觉几乎一样）。现在：`滑动` = QQ 式横向滑入+淡入（自己的气泡从右往左、别人的从左往右）；`淡入淡出` = 纯淡入无位移；`缩放弹入` = 绕气泡中心缩放弹入（过冲回弹）
 - **弹层动画改为完整淡入（三端）**：此前弹层 FADE 只有背景淡入、文字/图标直接出现（vanilla blit 走无颜色通道的 shader，setShaderColor 对它们无效）。现在设置/表情/快捷/搜索面板的背景、文字、图标全部逐元素 alpha 淡入
 - **侧边栏跟随面板淡入（三端）**：面板 FADE 打开时侧边栏不再只做滑动，而是跟随面板原地淡入（打开和关闭两个方向都生效）
@@ -936,7 +1163,58 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - **上栏/下栏不随面板淡入**：标题栏/底栏背景从不乘面板透明度（此前 SLIDE 靠位移掩盖），FADE/ZOOM 下原形毕露。修复：两栏背景改带 alpha 绘制、文字/图标/边框逐元素 alphaBlend，跟随面板淡入淡出
 - **侧边栏动画与面板割裂**：侧边栏硬编码 slide 曲线。修复：侧边栏进度走面板动画风格曲线；FADE 下侧边栏原地淡入（不位移）
 
+----
+
+**Fixes (2.3.7 follow-up 9)**
+
+- Banner avatar didn't fade with the banner (all three platforms): under FADE the background/text faded in but the avatar popped in — it used `setShaderColor` around `blit` (ineffective for `POSITION_TEX`). The avatar now uses `drawWithAlpha` and fades in with the banner
+- Context menus / mention popup / reply bar / notification bar / whisper bar didn't follow the panel fade (all three platforms): their backgrounds/borders/icons popped in solid under FADE (vanilla `blit` ignores `setShaderColor`). All switched to `drawWithAlpha` (borders via alphaBlend, icons via the alpha path), so they fade/scale with the panel
+
+**Fixes (2.3.7 follow-up 8)**
+
+- Title/bottom bar couldn't fade on Forge/Neo (Fabric's bars were already fixed): `ChatBars` wrapped vanilla `blit` with `setShaderColor(1,1,1,alpha)`, but `blit` uses the `POSITION_TEX` shader (vertices carry position+UV only, no color channel), so the alpha never reached the background textures — only text (its own alphaBlend pipeline) faded. The bars' backgrounds/borders/icons now use `drawWithAlpha` (the color-channel path), matching Fabric
+- Sidebar fade didn't work (all three platforms): `fadeSidebar` also wrapped the whole sidebar in `setShaderColor`, but internally it drew with color-less `drawTexture`/`blit` — the background/avatar/icons never faded, only the offset stopped. The sidebar render now takes a `float alpha` and draws its background/selection/hover/icons/player-heads through the alpha path — under FADE it truly fades in place, and under ZOOM it scales + fades in sync with the panel
+- Message-bubble avatars didn't fade with the message (all three platforms): the enter-animation avatar used `setShaderColor` around `blit` (ineffective), so it popped in. Avatars now use `drawWithAlpha` and fade in with the bubble
+
+**Fixes (2.3.7 follow-up 7)**
+
+- Sidebar toggle had no animation under a FADE panel (all three platforms): the `fadeSidebar` check only looked at the panel style, not whether a hamburger toggle was animating — under FADE it forced the sidebar offset to 0 (dropping the slide progress) and used the panel's own open/close progress for alpha (already finished = 1, so no fade either), leaving the sidebar completely static. Fixed: `fadeSidebar` now applies only to the panel's own open/close animation; the hamburger toggle always slides (matching the ZOOM/SLIDE behavior)
+
+**Fixes (2.3.7 follow-up 6)**
+
+- Fabric sidebar no longer detached under SLIDE: `getSidebarAnimProgress` had an inverted branch — with the sidebar open it returned 1f (fixed in place) while the panel kept sliding, so the panel and sidebar split under SLIDE. Fixed to match Forge/Neo (0 when closed, follow the panel's open-animation progress when open); the sidebar now slides as one unit with the panel under SLIDE
+- NeoForge mod-list description was garbled (NeoForge only): the Chinese part of `mod_description` in `gradle.properties` had a corrupted UTF-8 trailing byte, showing mojibake in-game. Fixed: unified to the same plain-English description as Forge/Fabric
+
+**Fixes (2.3.7 follow-up 5)**
+
+- Fabric panel content no longer slides under FADE/ZOOM when opening the chat (Fabric only): `init()` force-set `sidebarAnimating = true` with the sidebar open, and the tick wrote the sidebar slide progress into `panelX` — the layout origin of all panel content — so the whole panel slid horizontally under FADE/ZOOM (no matrix displacement). Forge/Neo never had this: their `init()` leaves `sidebarAnimating = false`. Fixed: Fabric `init()` now matches Forge/Neo. The sidebar's entrance is carried by the panel's open animation (FADE fades in place / ZOOM scales / SLIDE slides together); the sidebar state machine shouldn't re-drive it when the screen opens
+- Sidebar search box position (all three platforms): it was initialized at `setX(2 - SIDEBAR_W)` (off-screen, for the sidebar's own slide-in) but the sidebar no longer plays its own animation on open — on Forge/Neo it stayed off-screen, invisible and unclickable. Fixed: initialized at `setX(2)`
+
+**Fixes (2.3.7 follow-up 4)**
+
+- Panel background no longer slides in under FADE/ZOOM when the sidebar is open: its left edge grew from the screen's left edge to the sidebar's right edge (designed for the SLIDE panel), but under FADE/ZOOM the panel doesn't move — only the background did, stacking slide + fade/zoom. The background now only grows under SLIDE; under FADE/ZOOM it stays in the panel region and fades/scales in place with the sidebar as one unit
+
+**Fixes (2.3.7 follow-up 3)**
+
+- Sidebar no longer slides under panel ZOOM: it kept its horizontal offset while the panel scaled, stacking slide + zoom. It now drops the offset and scales with the panel around the panel center, fading in sync
+- Sidebar toggle had no animation under FADE: the FADE/NONE progress shortcut snapped to 0/1, so the hamburger toggle was instant. The toggle now always slides, independent of the panel animation style
+
+**Fixes (2.3.7 follow-up 2)**
+
+- Popup SLIDE now rises up 10px while fading in (all three platforms): previously SLIDE looked almost identical to FADE (fade only, no displacement)
+- Sidebar FADE closing no longer slides out: the closing branch hard-coded the slide offset and bypassed the animation-style dispatch (only the opening direction faded in place). It now fades in place in both directions
+- Sidebar ZOOM now scales with the panel: the ZOOM matrix only wrapped the chat panel, so the sidebar (outside the matrix) always slid and looked detached. It is now inside the same matrix, zooming around the panel center
+
+**Features**
+
+- Multi-style UI animations (all three platforms): the chat panel/banner/popups previously had a single slide-in animation with hard-coded easing. Each element now picks its own style independently: Slide (original), Fade (opacity only, vanilla-toast quad easing), Zoom (scale-in around center with overshoot), or None
+- Message enter animation (all three platforms, on by default): new bubbles slide up 8px + fade in over 250ms, staggered 40ms between consecutive messages
+- Popup open animation (all three platforms, on by default): settings/emoji/quick-chat/search panels fade or zoom in when opened (closing stays instant)
+- New settings ×4: `panel_anim_style` / `banner_anim_style` / `popup_anim_style` / `message_anim_style`, cycled via buttons in the config screen; the global "Animation" toggle still applies
+- Tests: Forge 241 / NeoForge 241 / Fabric 222 all green
+
 **Fixes (2.3.7 follow-up)**
+
 - Message enter animation now has three distinct styles (all three platforms): Slide = QQ-style horizontal slide-in + fade (own bubbles from right to left, others from left to right); Fade = pure fade, no displacement; Zoom = scale-in around the bubble center with overshoot
 - Popup animation is now a full fade (all three platforms): vanilla blit uses a color-less shader so setShaderColor never affected them — the settings/emoji/quick-chat/search panels now fade their backgrounds, text and icons per-element
 - Sidebar now fades in place with the panel under FADE in both directions
@@ -947,18 +1225,24 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v2.3.6
 
 **修复**
+
 - **@ 补全回车误输入补全名**：输入 `@` 弹出玩家补全后直接按回车，会把候选名字插进输入框（如 `/tp @s` 场景把含 "s" 的玩家名补进命令）。现在必须先用 ↑/↓ 或滚轮选中候选，回车才应用补全；没选过直接回车 = 发送当前文本。另外命令（`/` 开头）里不再弹玩家补全——`@s`/`@p` 是原版选择器不是玩家名，命令输入走原版指令建议框
 - **自 /msg 不弹横幅/音效（三端，开启"自己私聊通知"仍不弹）**：自己 /msg 自己的消息走"本地发送反馈"气泡，而 whisper 横幅/音效入口被 `!localSend` 无条件挡住——即使开启 `own_whisper_notify` 也不弹横幅和音效。现在该配置开启时本地反馈气泡也放行给通知控制器，自 /msg 正常弹横幅 + 音效（需对应开启私聊横幅/音效配置）
 
 **新功能**
+
 - **横幅位置偏移配置（三端）**：通知横幅默认固定在屏幕顶部中央，与 Jade 等 HUD mod 的显示区域重叠时无法挪开。新增 `banner_offset_x` / `banner_offset_y` 两个配置项（设置 → 通知 → 横幅通用），水平/垂直微调横幅位置，避开其他 HUD 元素
 - **IMBlocker 输入法适配（三端）**：装了 IMBlocker 后，命令输入会自动切换到英文输入法、退出命令恢复中文——与装原版聊天框的行为一致。e33chat 的自定义聊天框绕过了 IMBlocker 监听的 vanilla 回调，现在通过反射桥补上同一钩子；没装 IMBlocker 时完全无影响
 
+----
+
 **Fixes**
+
 - Mention completion no longer applied by raw Enter: after `@` pops the player list, Enter used to insert the highlighted candidate (e.g. typing `/tp @s` injected a matching player name into the command). Now Enter only applies the candidate after you actually selected it with ↑/↓ or the scroll wheel; otherwise Enter sends the text as-is. Player-name completion is also disabled inside commands (`/`-prefixed) — `@s`/`@p` are vanilla selectors, and command input is handled by the vanilla suggestion window
 - Self-whisper banner/sound never fired even with own-whisper notify enabled (all three platforms): a self /msg creates a local-send feedback bubble, and the whisper-notification entry was gated by `!localSend` unconditionally, so neither banner nor sound ever fired. The gate now lets the local bubble through when own-whisper notify is on (the controller already gates on isOwn/selfNotify, and the whisper banner/sound follow their own toggles)
 
 **Features**
+
 - Configurable banner position: the notification banner is fixed at top-center and could not be moved out of the way of HUD mods such as Jade. New `banner_offset_x` / `banner_offset_y` settings (Settings → Notifications → Banner (Shared)) nudge the banner horizontally/vertically to clear other HUD elements
 - IMBlocker IME support (all three platforms): with IMBlocker installed, typing a command auto-switches the input method to English and back to Chinese on exit — matching vanilla chat. e33chat's custom chat screen bypasses the vanilla callback IMBlocker listens to; a reflection bridge now re-attaches the same hook, and does nothing when IMBlocker is absent
 - Tests: Forge 241 / NeoForge 241 / Fabric 222 all green
@@ -966,66 +1250,92 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v2.3.5
 
 **修复**
+
 - **聊天界面掉帧（核显/低配明显，Intel Arc 130T 实测复现）**：面板背景模糊（blur）在聊天界面打开期间每一帧都执行完整 5 级金字塔（10 次全屏 blit）——`panelOpacity` 默认 80 使 `panelOpacity < 0.999` 的触发条件在滑入动画结束后永真，模糊停不下来。核显 + GL 转译层扛不住每帧全屏 blit。现在完整金字塔每 2 帧刷新一次，中间帧直接重贴上一帧的模糊缓存（1 次 blit），开销减半以上；窗口缩放重建强制刷新，不残留脏模糊。模糊背景无高频细节，降帧视觉几乎无感
 
+----
+
 **Fixes**
+
 - Chat UI stutter on integrated/low-end GPUs (Intel Arc 130T reproduced): the panel blur ran the full 5-level pyramid (10 full-screen blits) every frame while the chat was open — `panelOpacity` defaults to 80, so the `panelOpacity < 0.999` blur guard never exits after the slide-in animation. The pyramid now refreshes every other frame and in-between frames replay the cached blur (1 blit), more than halving the cost; window-resize rebuilds force a full refresh so no stale blur lingers. The blur has no high-frequency detail, so the skipped frames are visually indistinguishable
 - Tests: Forge 241 / NeoForge 241 / Fabric 222 all green
 
 ## v2.3.4
 
 **修复**
+
 - **离线玩家引用块同步（三端）**：离线服/内网穿透场景下，未通过用户名验证的玩家（`Failed to verify username`）在接收端消息的 senderUUID 会落成 `UUID(0,0)`，与服务器广播的真实 UUID 失配——A 引用 B 的消息时，B 端永远补不上引用块。现在 ChatMeta 包附带发送者原始名字，匹配放宽为「UUID 精确 或 原始玩家名相等」，离线玩家也能正常同步引用块。网络包格式已变更，两端必须同升 2.3.4，老客户端混用会丢 meta
 
+----
+
 **Fixes**
+
 - Quote block sync for offline players: on offline/LAN-forwarded servers, players who fail username verification (`Failed to verify username`) arrive on the receiving side with a `UUID(0,0)` sender, so the UUID in the broadcast ChatMeta never matched and the quoted player never saw the quote block. ChatMeta now carries the sender's raw name and matching accepts either an exact UUID or an equal raw player name. The packet format changed — both ends must run 2.3.4 together; mixing with an old client drops the meta
 - Tests: Forge 85 / NeoForge 85 / Fabric 85 all green
 
 ## v2.3.3
 
 **修复**
+
 - **重复消息残留引用块**：先发一条引用回复"妈妈"，紧接着发一条同样的"妈妈"（不引用），anti-spam 会把两条合并成一个气泡，但合并前的实现原样拷贝了第一条的引用块——第二条明明没引用却显示引用块。现在合并气泡的引用块只反映本条消息自己的引用状态；仍带引用继续连发同内容时引用块正常保留
 
 **新功能**
+
 - **ChatImage 图片兼容（三端）**：装 ChatImage 后，气泡内可直接显示图片——支持 `[[CICode,url=...]]`（含 CQ 码转换）和 `https/http` 图片链接两种格式，文本变为绿色 `[Image]` 并带悬浮预览，与聊天框行为一致；自己发送的图片即时预览。不装 ChatImage 时原样显示文本，完全不影响原有功能
 
+----
+
 **Features**
+
 - ChatImage image support (all three platforms): with ChatImage installed, images render inside bubbles — both `[[CICode,url=...]]` (including CQ code conversion) and `https/http` image links become green `[Image]` text with a hover preview, matching the vanilla chat; your own sent images preview immediately. Without ChatImage the codes stay plain text and nothing else changes
 
 **Fixes**
+
 - Stale quote block on duplicated messages: send a quoted "妈妈", then an identical unquoted "妈妈" — anti-spam collapsed both into one bubble, but the merge copied the first bubble's quote block, so the second (unquoted) message wrongly showed one. The merged bubble now reflects only this send's own quote state; consecutive re-quoted duplicates keep their quote block
 - Tests: NeoForge 236 all green
 
 ## v2.3.2
 
 **新功能**
+
 - **屏蔽玩家**：右键玩家头像菜单新增「屏蔽玩家」项（已屏蔽则显示「取消屏蔽」），或在设置 → 聊天框 → 屏蔽列表直接编辑（逗号分隔精确名字）。被屏蔽玩家的消息**完全消失**——原版聊天框、气泡、横幅、音效全部没有；屏蔽即刻生效并清除该玩家已加载的历史消息，重进服也不会从历史恢复。匹配不区分大小写、自动忽略 § 颜色码；以玩家真实名称为主键、tab 列表显示名兜底，昵称插件/离线服也能命中
 
 **调整**
+
 - **屏蔽入口移到头像菜单**：此前临时加在消息右键菜单（复制/引用/屏蔽），现改为头像菜单第三项（传送/私聊/屏蔽），消息菜单恢复「复制/引用」两项，交互入口统一
 
+----
+
 **Features**
+
 - Block players: a new "Block Player" item on the right-click avatar menu (shows "Unblock" once blocked), or edit the Blocked List directly in Settings → Chat → Blocked List (comma-separated exact names). A blocked player's messages vanish completely — vanilla chat, bubbles, banners and sounds. Blocking takes effect immediately and purges the player's already-loaded history; rejoining never restores it. Matching is case-insensitive, ignores § color codes, keys off the real player name with the tab-list display name as fallback (nickname plugins / offline servers)
 
 **Changes**
+
 - Block entry moved to the avatar menu: the temporary third item on the message menu (Copy/Quote/Block) is gone — the message menu is back to Copy/Quote, block now lives on the avatar menu (Teleport/Whisper/Block) as a single unified entry point
 
 **Fixes**
+
 - Tests: Forge 78 / NeoForge 78 / Fabric 78 all green
 
 ## v2.3.1
 
 **修复**
+
 - **图标采样窗口修正（2.2.8 回归）**：图标纹理约定 16×16（内容居中占 14×14，四周 1px 透明边），但 2.2.8 的"防边缘切割"补丁把采样窗口写成了 `size`（右键菜单 12px）→ 每个图标右 2 列 + 下 2 行被切掉，复制图标的叠加页右页被吞最明显。三端 9 处（ChatBars / ChatContextMenus / ChatSidebar / ChatBubbleScreen.drawTextureIcon）改为采样完整 14×14 内容区，图标完整显示
 - **Fabric 客户端配置文件对齐**：`config/e33chat.json` → `config/e33chat-client.json`（与 Forge/Neo 的 `e33chat-client.toml` 对齐）；检测到旧文件自动迁移继承设置，老用户不丢配置
 
+----
+
 **Fixes**
+
 - Icon sampling window fixed (2.2.8 regression): icon textures are 16×16 (content centered at 14×14 with a 1px transparent border), but the 2.2.8 "anti-clipping" patch sampled only `size` (12px in the context menu) → the right 2 columns and bottom 2 rows of every icon were cut off, most visibly the copy icon's overlay page. All 9 sites across the three platforms (ChatBars / ChatContextMenus / ChatSidebar / ChatBubbleScreen.drawTextureIcon) now sample the full 14×14 content area
 - Fabric client config file renamed `config/e33chat.json` → `config/e33chat-client.json` (aligned with Forge/Neo's `e33chat-client.toml`); a legacy file is auto-migrated so existing settings carry over
 
 ## v2.3.0
 
 **全面审计修复（2.2.0 → 2.3.0，三端同步）**
+
 - **私聊回显抑制词表对齐检测词表**：`PM to X: hi` / `Msg to X` 式出站回显此前不被抑制 → 误判为入站私聊（重复气泡+横幅），且 pendingEcho 残留会在 10s 内把 partner 的真实回复当回声吞掉（违反"宁重复不吞消息"）。补全 `pm/message/msg/tell/私信/密谈/对你说/to you` 词表 + 正则单词边界
 - **Fabric 服务端三处同步丢失修复**（2.1.0 重构把 `ChatServerListener` 并入 `ChatBubbleMod` 时未完整移植）：①mention 正则 `@(\w+)` → `@([\p{L}\p{N}_]+)`（中文玩家名跨客户端 @ 通知恢复）②引用 10s 过期（被反垃圾插件拦截的过期引用不再错误标记下一条消息）③`/msg`/`/tell`/`/w`/`/whisper` 私聊命令消费引用并广播引用元数据（Fabric API 无命令执行事件，用 `CommandManager.execute` mixin 等价实现）
 - **配置界面取消语义修复**：`HISTORY_RETENTION_DAYS` 漏进 snapshotAll → 改历史保留天数后退出/ESC 不回滚且无"已更改"提示
@@ -1040,8 +1350,18 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - **HUD 键名提示色随主题**（此前硬编码白字，浅色背景下对比差）
 - **清理**：4 个死 lang 键（cancel/gen_hint/preview_hint/template_placeholder）
 - 测试：Forge 225 / NeoForge 225 / Fabric 196 全绿
+- **服务端命令走 lang 翻译**：`/e33chat template` 系列与模板保存校验的回复此前硬编码中文（英文客户端显示中文）；全部改为 lang 键（含测试输出/校验错误/聊天私聊类别名），系统横幅 lang 描述同步为"默认开启"
+- **通知音效参数统一**：Forge/Neo 的 `forUI(sound, pitch, volume)` 参数顺序用错（0.8×v 传进 pitch、volume 钉死 0.25 → 配置音量完全失效）；Fabric `master` 传 volume=0.64 过响且音高 0.25 低沉。统一 pitch=0.25、volume=0.25×配置系数（配置 80 → 0.2），小声且音量滑条有效
+- **配置界面恢复半透明**：`config_bg` 烘焙 75% 不透明（0xC0），被无 alpha 顶点的 blit/drawTexture 丢弃 → 画成不透明深灰；改走带 alpha 顶点绘制，世界重新透出
+- **HUD 键名提示回退纯白**：2.3.0 审计误把它改成随主题，恢复 `0xFFFFFFFF`（图标下按键提示不随聊天主题）
+- **常用语/搜索输入框被弹层盖住**（2.2.9 `5bb740e` z 提升回归）：输入框 widget 在 z=50 渲染，被 z=100 的不透明面板背景盖住文字/光标 → 看起来"无法聚焦输入"（实际聚焦正常，边框/搜索都生效）；面板打开时在同 z 重画输入框 widget 修复
+- **面板模糊节流回退**：2.3.0 的"每 3 帧重算"假设模糊结果跨帧保留，但模糊内容是实时世界、每帧重绘 → 跳过帧显示清晰世界，模糊看起来失效；回退为每帧重算
+
+
+----
 
 **Audit fixes (2.2.0 → 2.3.0, all platforms)**
+
 - Whisper echo keyword table aligned with the detector: "PM to X: hi"-style outgoing echoes were not suppressed → misclassified as incoming whispers, and the stale pendingEcho swallowed the partner's real reply within 10s. Added `pm/message/msg/tell/私信/密谈/对你说/to you` + word-boundary regex
 - Fabric server parity (lost when the 2.1.0 refactor merged `ChatServerListener` into `ChatBubbleMod`): ① mention regex `@(\w+)` → `@([\p{L}\p{N}_]+)` (Chinese player names work again) ② 10s quote expiry (blocked quotes no longer tag unrelated messages) ③ `/msg` `/tell` `/w` `/whisper` consume quotes and broadcast quote meta (Fabric has no command-execution event, so a `CommandManager.execute` mixin provides the equivalent)
 - Config screen cancel semantics: `HISTORY_RETENTION_DAYS` was missing from the snapshot, so changing it could not be reverted on ESC
@@ -1056,14 +1376,6 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - HUD key-hint color follows the theme (was hardcoded white)
 - Cleanup: 4 dead lang keys removed
 - Tests: Forge 225 / NeoForge 225 / Fabric 196 all green
-- **服务端命令走 lang 翻译**：`/e33chat template` 系列与模板保存校验的回复此前硬编码中文（英文客户端显示中文）；全部改为 lang 键（含测试输出/校验错误/聊天私聊类别名），系统横幅 lang 描述同步为"默认开启"
-- **服务端命令走 lang 翻译**：`/e33chat template` 系列与模板保存校验的回复此前硬编码中文（英文客户端显示中文）；全部改为 lang 键（含测试输出/校验错误/聊天私聊类别名），系统横幅 lang 描述同步为"默认开启"
-- **通知音效参数统一**：Forge/Neo 的 `forUI(sound, pitch, volume)` 参数顺序用错（0.8×v 传进 pitch、volume 钉死 0.25 → 配置音量完全失效）；Fabric `master` 传 volume=0.64 过响且音高 0.25 低沉。统一 pitch=0.25、volume=0.25×配置系数（配置 80 → 0.2），小声且音量滑条有效
-- **配置界面恢复半透明**：`config_bg` 烘焙 75% 不透明（0xC0），被无 alpha 顶点的 blit/drawTexture 丢弃 → 画成不透明深灰；改走带 alpha 顶点绘制，世界重新透出
-- **HUD 键名提示回退纯白**：2.3.0 审计误把它改成随主题，恢复 `0xFFFFFFFF`（图标下按键提示不随聊天主题）
-- **常用语/搜索输入框被弹层盖住**（2.2.9 `5bb740e` z 提升回归）：输入框 widget 在 z=50 渲染，被 z=100 的不透明面板背景盖住文字/光标 → 看起来"无法聚焦输入"（实际聚焦正常，边框/搜索都生效）；面板打开时在同 z 重画输入框 widget 修复
-- **面板模糊节流回退**：2.3.0 的"每 3 帧重算"假设模糊结果跨帧保留，但模糊内容是实时世界、每帧重绘 → 跳过帧显示清晰世界，模糊看起来失效；回退为每帧重算
-- **Server commands now localize**: `/e33chat template` replies and template-save validation were hardcoded Chinese (English clients saw Chinese); all moved to lang keys (including test output, validation errors, chat/whisper kind names), and the system-banner description now says "on by default"
 - **Server commands now localize**: `/e33chat template` replies and template-save validation were hardcoded Chinese (English clients saw Chinese); all moved to lang keys (including test output, validation errors, chat/whisper kind names), and the system-banner description now says "on by default"
 - **Notification sound unified**: Forge/Neo `forUI(sound, pitch, volume)` had the arguments swapped (0.8×v went into pitch, volume stuck at 0.25, so the volume slider did nothing); Fabric passed volume 0.64 (too loud) with a low 0.25 pitch. Now pitch=0.25, volume=0.25×config (80 → 0.2) on all platforms
 - **Config screen transparency restored**: `config_bg` bakes at 75% alpha (0xC0) but plain blit/drawTexture drops the alpha (no color vertex) → solid dark grey; now drawn with alpha-aware vertices so the world shows through
@@ -1071,12 +1383,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - **Quick-chat/search inputs no longer hidden** (2.2.9 `5bb740e` z-lift regression): the input widgets render at z=50 but the opaque panel overlay at z=100 covered their text/caret, looking like focus was broken (it was never broken — the border and search both worked); the widgets are redrawn at the panel's z when open
 - **Blur throttle reverted**: the 2.3.0 "recompute every 3rd frame" assumed the blur result persists across frames, but the blur content is the live world which repaints every frame — skipped frames showed the clear world, so the blur looked off; back to every-frame blur
 
-
-***
-
 ## v2.2.9
 
 **WATUT 兼容（ChatBubbleScreen 改继承 ChatScreen）**
+
 - `ChatBubbleScreen` 从 `extends Screen` 改为 `extends ChatScreen`（三端）——WATUT（What Are They Up To）靠 `instanceof ChatScreen` + 读取 `input.getValue()` 检测玩家打字/GUI 状态，原 `extends Screen` 导致全部判定失败，玩家打开聊天时别人看不到打字动画
 - 输入框复用父类 `protected EditBox input`（yarn: `chatField`），WATUT 的 AT 已 public 化该字段，可直接读到我们的输入内容
 - 绕开父类方法（`keyPressed`/`mouseClicked`/`render` 访问 package-private `commandSuggestions`/`chatInputSuggestor`，跨包子类无法初始化）：自实现等价逻辑，父类输入框/建议框不会出现（保持 cancel 原版输入框）
@@ -1085,18 +1395,22 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - **修复聊天键未响应**：extends ChatScreen 后 ChatBubbleScreen 命中自身 ScreenEvent.Opening 拦截（instanceof ChatScreen）→ setScreen 无限递归；拦截逻辑排除 ChatBubbleScreen 自身
 - **修复打字崩溃（NPE: CommandSuggestions null）**：父类 ChatScreen 的 onEdited/moveInHistory/resize 访问 package-private commandSuggestions（跨包子类无法初始化 = null）——responder 改绑自有方法、override moveInHistory（历史记录上/下键）、override resize；Fabric 端 yarn 字段 chatInputSuggestor 同源问题一并处理
 
+----
+
 **WATUT compatibility (ChatBubbleScreen now extends ChatScreen)**
+
 - `ChatBubbleScreen` changed from `extends Screen` to `extends ChatScreen` on all three platforms — WATUT detects typing/GUI state via `instanceof ChatScreen` + reading `input.getValue()`; extending plain Screen made every check fail, so other players never saw the typing animation
 - The edit box now uses the parent's `protected EditBox input` (yarn: `chatField`); WATUT's access transformer already publicizes that field, so it reads our input content directly
 - Parent methods that touch package-private `commandSuggestions`/`chatInputSuggestor` (uninitializable from a cross-package subclass) are bypassed with equivalent local logic — the vanilla input box / suggestor never appear (original cancel preserved)
 - `moveInHistory` now uses the parent implementation; config save / preset input unchanged
 - Version 2.2.8 → 2.2.9; synced across all platforms, build + tests green
 
-***
+## v2.2.8
 
-## v2.2.8（纹理 API 迁移）
+> 本节合并了同一版本号下的 3 段交付，原文段标题后缀依次为 `纹理 API 迁移`、`修订`、（无后缀）。
 
 **全 UI 纹理走原版资源 API（删手工加载层）**
+
 - 所有可纹理化 UI（组件 + 图标 + 状态高亮）改走 `blit(ResourceLocation)` 懒加载——`TextureManager.getTexture` 无缓存时自动 `new SimpleTexture` 从资源栈读取，**用户资源包 > mod jar 内置 PNG**
 - 默认纹理改为 jar 内置 16×16 纯色 PNG（`assets/e33chat/textures/gui/{dark|light}/` 23 元素 × 2 主题），色值与原代码生成完全一致，零资源包时外观零变化
 - **新增 6 个状态高亮纹理**：`hover_bg` / `sidebar_selected` / `sidebar_hover` / `context_hover` / `close_bg` / `close_hover`——hover/选中/关闭按钮背景全部从 `g.fill(颜色)` 改为纹理 blit，资源包可覆盖
@@ -1107,10 +1421,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - **修复提及检测崩溃（社区 PR #10 by Spagles）**：消息以玩家名开头 + requireAt 关闭时 `text.charAt(-1)` 抛 `StringIndexOutOfBoundsException`；移除冗余的 `charAt(idx-1) != '@'` 检查（该分支恒为 true），新增 `MentionDetectorTest` 7 例回归
 - **2.2.8 收尾三端同步审计**：NeoForge/Fabric 补上 Forge 的面板滑入 blur 偏移补偿（`blurPanel(panelOffset + fillLeft, ...)`——blur 区跟随滑入动画，否则动画中 blur 左缘与内容错位）；Fabric lang 同步最新分类 key
 - **服务端配置审计 G1-G4（2.2.8 收尾）**：
-  - G1 插件私聊词：`hasWhisperKeywordBeforeColon` 扩词——私信/密谈 + 英文 pm/message/msg/tell（词边界防 hepm/msgbox 误判）；WhisperFormatsTest 补 4 例
-  - G2 广播仿冒：`parseGeneric` 拒绝名字前出现聊天分隔符（`系统>>Steve`/`公告»Steve`/`系统：Steve` 不再误归属成玩家）；MessagePresentationTest 补 3 例
-  - G3 多色 § 嵌名：`parseDecoratedPlayerLine` 双侧剥 § + 偏移映射（`S§6t§beve` 命中 Steve，偏移指向原文供样式切片），守卫1/守卫3/inferFromMessage 全部接新偏移；MessagePresentationTest 补 4 例（含偏移断言）
-  - G4 模板 miss 诊断：`logTemplateMiss` 日志含已配置模板列表（chat/whisper 原始串）；系统消息灰字兜底加 `guard fallback -> gray` 日志
+- G1 插件私聊词：`hasWhisperKeywordBeforeColon` 扩词——私信/密谈 + 英文 pm/message/msg/tell（词边界防 hepm/msgbox 误判）；WhisperFormatsTest 补 4 例
+- G2 广播仿冒：`parseGeneric` 拒绝名字前出现聊天分隔符（`系统>>Steve`/`公告»Steve`/`系统：Steve` 不再误归属成玩家）；MessagePresentationTest 补 3 例
+- G3 多色 § 嵌名：`parseDecoratedPlayerLine` 双侧剥 § + 偏移映射（`S§6t§beve` 命中 Steve，偏移指向原文供样式切片），守卫1/守卫3/inferFromMessage 全部接新偏移；MessagePresentationTest 补 4 例（含偏移断言）
+- G4 模板 miss 诊断：`logTemplateMiss` 日志含已配置模板列表（chat/whisper 原始串）；系统消息灰字兜底加 `guard fallback -> gray` 日志
 
 **Server-config audit G1-G4 (2.2.8 wrap-up)**: plugin whisper keywords (私信/密谈 + pm/message/msg/tell with word boundaries); broadcast-spoof guard (names preceded by chat separators no longer attributed); multi-color §-embedded names matched via dual-side strip + offset mapping (offsets point at the original text for style slicing); template-miss diagnostics now include the configured template list, and gray-fallback logging added
 
@@ -1119,20 +1433,8 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 
 **Fixed launch missing-texture**: lazy-load RLs must carry the `.png` suffix (SimpleTexture looks up the path verbatim, no auto-suffix); Fabric component backgrounds switched to the 11-arg split form to avoid UV overflow
 
-**All UI textures migrated to vanilla resource API (manual loading layer removed)**
-- All texturable UI (components + icons + state highlights) now render via `blit(ResourceLocation)` lazy loading — `TextureManager.getTexture` auto-creates a `SimpleTexture` on cache miss, reading from the resource stack: **user resource pack > mod-jar PNG**
-- Default textures are now jar-embedded 16×16 solid-color PNGs (23 elements × 2 themes) with colors identical to the old generated ones — zero visual change without a resource pack
-- **6 new state-highlight textures**: `hover_bg` / `sidebar_selected` / `sidebar_hover` / `context_hover` / `close_bg` / `close_hover` — hover/selected/close-button backgrounds switched from `g.fill(color)` to texture blits, overridable
-- **Removed manual loading**: `UiTextureManager.loadOrGenerate`/`preloadAll`, `loadIconTextures`/`loadIconTexture`/`ensureIconsLoaded`, `TextureGenerators` + its 7 tests
-- **F3+T hot reload**: edit a pack PNG → F3+T → UI updates instantly (SimpleTexture re-reads; old DynamicTexture didn't)
-- Time separator / palette / @mention selected row keep `g.fill` (translucent blend semantics unchanged — no scrollbar-style blend regression)
-- Tests Forge/NeoForge 204 → 197, Fabric 175 → 168; synced across all three platforms
-
-***
-
-## v2.2.8（修订）
-
 **圆角组件回退 SDF（2.2.8 首版 9-slice 纹理化撤销）**
+
 - 聊天气泡 / 引用回复块 / @提及横幅背景回退 `RoundRectRenderer`（SDF shader）——任何圆角配置平滑、配置实时生效
 - 撤销原因：9-slice 纹理采样与贴图尺寸失配（border 写死/传参 vs 贴图实际尺寸），导致圆角局部放大、锯齿、方形；两轮修复后仍不可靠，回退保稳定
 - 删除 `NineSliceRenderer` 与圆角纹理生成（`bubble_bg`/`quote_bg`/`banner_bg` 元素、`roundedRect`、ROUNDED 类型）
@@ -1140,19 +1442,8 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - **代价**：气泡/引用/横幅不再可被资源包覆盖（SDF 是代码画）
 - 测试 207 → 204（删 3 个圆角纹理测试）；三端同步
 
-**Rounded components reverted to SDF (2.2.8 first-release 9-slice texturing undone)**
-- Chat bubbles / quote blocks / @-mention banner backgrounds back to `RoundRectRenderer` (SDF shader) — smooth at any corner-radius config, config-driven live
-- Why: 9-slice texture sampling mismatched the texture size (hardcoded/parameterized border vs actual texture), causing upscaled corners, jaggies and squares; unreliable after two fix rounds, reverted for stability
-- `NineSliceRenderer` and rounded-texture generation removed (`bubble_bg`/`quote_bg`/`banner_bg` elements, `roundedRect`, ROUNDED kinds)
-- **Kept texture work**: toast black-block root-cause fix (opaque bake + drawWithAlpha), time separator, strong-hint bar, quick-chat scrollbar, config-save re-bake, all 1×1 stretch elements unaffected
-- **Cost**: bubbles/quotes/banner are no longer resource-pack overridable (SDF is code-drawn)
-- Tests 207 → 204 (3 rounded-texture tests removed); synced across all three platforms
-
-***
-
-## v2.2.8
-
 **纹理化覆盖全部动态尺寸组件（9-slice，三端同步）**
+
 - 新增 `NineSliceRenderer`：自写 stretch 版 9-slice——四角不拉伸、边单向拉伸、中心双向拉伸（与 vanilla tile 平铺不同，渐变/图案不变形）；贴图约定 16×16、四角区 4px，1×1 纯色元素自动退化纯拉伸
 - 聊天气泡 / 引用回复块 / @提及横幅背景改为纹理渲染：白色圆角纹理（半径跟随配置）× tint 用户色——零资源包视觉不变，资源包可覆盖圆角/边框/图案；横幅阴影仍代码绘制
 - **toast 黑块根因修复**：2.2.4 纹理化时 `TOAST_BG` 烘焙不透明 `toastBg`（dark=纯黑）+ blit 无 alpha 通道 → 一整块不透明黑块；现烘焙强制不透明 + `drawWithAlpha` 动态 alpha 通道，纹理可覆盖、透明度可控
@@ -1163,7 +1454,31 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - `TextureGenerators.roundedRect` 纯函数（零 MC 依赖，可单测）；测试 Forge 204 / NeoForge 204 / Fabric 178 全绿
 - 附带示例资源包 `E33Chat-Texture-Demo`（已放入测试服 resourcepacks/）：气泡边框、彩色横幅等 9-slice 覆盖演示
 
+----
+
+> This section merges the three deliveries that shared this version number; the original headings carried the suffixes `纹理 API 迁移`, `修订` and none.
+
+**All UI textures migrated to vanilla resource API (manual loading layer removed)**
+
+- All texturable UI (components + icons + state highlights) now render via `blit(ResourceLocation)` lazy loading — `TextureManager.getTexture` auto-creates a `SimpleTexture` on cache miss, reading from the resource stack: **user resource pack > mod-jar PNG**
+- Default textures are now jar-embedded 16×16 solid-color PNGs (23 elements × 2 themes) with colors identical to the old generated ones — zero visual change without a resource pack
+- **6 new state-highlight textures**: `hover_bg` / `sidebar_selected` / `sidebar_hover` / `context_hover` / `close_bg` / `close_hover` — hover/selected/close-button backgrounds switched from `g.fill(color)` to texture blits, overridable
+- **Removed manual loading**: `UiTextureManager.loadOrGenerate`/`preloadAll`, `loadIconTextures`/`loadIconTexture`/`ensureIconsLoaded`, `TextureGenerators` + its 7 tests
+- **F3+T hot reload**: edit a pack PNG → F3+T → UI updates instantly (SimpleTexture re-reads; old DynamicTexture didn't)
+- Time separator / palette / @mention selected row keep `g.fill` (translucent blend semantics unchanged — no scrollbar-style blend regression)
+- Tests Forge/NeoForge 204 → 197, Fabric 175 → 168; synced across all three platforms
+
+**Rounded components reverted to SDF (2.2.8 first-release 9-slice texturing undone)**
+
+- Chat bubbles / quote blocks / @-mention banner backgrounds back to `RoundRectRenderer` (SDF shader) — smooth at any corner-radius config, config-driven live
+- Why: 9-slice texture sampling mismatched the texture size (hardcoded/parameterized border vs actual texture), causing upscaled corners, jaggies and squares; unreliable after two fix rounds, reverted for stability
+- `NineSliceRenderer` and rounded-texture generation removed (`bubble_bg`/`quote_bg`/`banner_bg` elements, `roundedRect`, ROUNDED kinds)
+- **Kept texture work**: toast black-block root-cause fix (opaque bake + drawWithAlpha), time separator, strong-hint bar, quick-chat scrollbar, config-save re-bake, all 1×1 stretch elements unaffected
+- **Cost**: bubbles/quotes/banner are no longer resource-pack overridable (SDF is code-drawn)
+- Tests 207 → 204 (3 rounded-texture tests removed); synced across all three platforms
+
 **Texture-driven all dynamic-size components (9-slice, all three platforms)**
+
 - New `NineSliceRenderer`: self-written stretch 9-slice — corners fixed, edges stretched one-way, center both ways (unlike vanilla tile tiling, gradients/patterns don't distort); 16×16 texture convention with a 4px corner area, 1×1 solids degrade to plain stretch automatically
 - Chat bubbles / quote blocks / @-mention banner now render from textures: white rounded-rect (radius follows config) × tint of user color — zero visual change without a resource pack, shapes/borders/patterns overridable; banner shadow stays code-drawn
 - **Toast black-block root cause fixed**: in 2.2.4 `TOAST_BG` baked opaque `toastBg` (pure black in dark) and the blit had no alpha channel → one opaque black block; now baked opaque + `drawWithAlpha` dynamic alpha — texture overridable, opacity controllable
@@ -1174,11 +1489,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - `TextureGenerators.roundedRect` pure function (zero MC deps, unit-testable); tests Forge 204 / NeoForge 204 / Fabric 178 all green
 - Bundled demo pack `E33Chat-Texture-Demo` (placed in the test server's resourcepacks/): bubble borders, colored banners — 9-slice override demos
 
-***
-
 ## v2.2.7
 
 **模板引擎加固与插件生态适配（Forge 先行）**
+
 - 修复：模板编译崩溃——同字段重复（`{prefix}{prefix}`）会生成重复正则命名组并抛 `PatternSyntaxException`，穿透命令/GUI/同步/保存全部入口；现显式拒绝并兜底 try/catch
 - 修复：`extractWhisperContent` 两处实现不一致（Store 版 lastIndexOf 会在内容含冒号时截断）；统一为首分隔符语义
 - 修复：模板路径的字面 § 色码（插件原样下发 `§6`）现在用 `parseStyledText` 还原成真实颜色，与守卫路径一致（不再显示裸 `§6` 字形）
@@ -1187,7 +1501,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 新增测试覆盖：模板崩溃回归、后缀式 content、`{sep}`、真实插件格式（含 § 码字面量）、多冒号内容不截断——测试 195 → 204
 - 仅 Forge 1.20.1（NeoForge / Fabric 后续同步）
 
+----
+
 **Template engine hardening & plugin-ecosystem adaptation (Forge first)**
+
 - Fix: template compile crash — duplicated fields (`{prefix}{prefix}`) produced duplicate regex named groups and threw `PatternSyntaxException` through every entry point (command/GUI/sync/save); now rejected explicitly with a try/catch fallback
 - Fix: `extractWhisperContent` had two inconsistent implementations (the Store version truncated content containing colons via lastIndexOf); unified to first-separator semantics
 - Fix: literal §-codes in template output (plugins sending raw `§6`) are now rebuilt into real colors via `parseStyledText`, matching the guard path
@@ -1196,11 +1513,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - Tests 195 → 204 (crash regression, suffix content, `{sep}`, real plugin formats incl. literal §-codes, colon-rich content)
 - Forge 1.20.1 only (NeoForge / Fabric sync later)
 
-***
-
 ## v2.2.6
 
 **服务端消息格式模板（声明式解析，Forge 先行）**
+
 - 新增模板层：服务端声明消息格式（字段占位符），客户端按声明精确剖开 sender/装饰名/内容/私聊方向——模板命中 = 证据最强，直接跳过启发式守卫
 - 模板语法：`{prefix}` `{display_name}` `{name}` `{content}` `{sender}` `{target}`；字面量分隔符原样转义（`»` `：` `>>` 等）
 - 服务端配置（`config/e33chat-server.toml`）：`chat_templates` / `whisper_templates` / `template_debug`；空列表 = 关闭模板，回到守卫识别
@@ -1214,9 +1530,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 仅 Forge 1.20.1（NeoForge / Fabric 后续同步）
 - 测试 158 → 195
 
-***
+----
 
 **Server-configured message-format templates (declarative parsing, Forge first)**
+
 - New template layer: the server declares its message format (field placeholders); the client splits sender / decorated name / content / whisper direction exactly per the declaration — a template match is the strongest evidence and bypasses the heuristic guards
 - Template syntax: `{prefix}` `{display_name}` `{name}` `{content}` `{sender}` `{target}`; literal separators are escaped verbatim (`»` `：` `>>` …)
 - Server config (`config/e33chat-server.toml`): `chat_templates` / `whisper_templates` / `template_debug`; empty list = disabled, guards take over
@@ -1230,11 +1547,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - Forge 1.20.1 only (NeoForge / Fabric follow-up)
 - Tests 158 → 195
 
-***
-
 ## v2.2.5
 
 **纹理化覆盖全部结构色元素**
+
 - 右键菜单（底色 + 边框）、@ 提及弹窗底、复制提示、私聊模式横条改为纹理渲染
 - 设置界面：全屏背景、左右树分割线、选项分隔线、预览区分割线、双滚动条（track/thumb 走动态 alpha 通道）
 - 表情面板（tab 栏 / 分割线 / 内容区）、常用语面板（面板底 / 输入框）、搜索面板（面板底 / 输入框）、设置菜单底统一纹理化
@@ -1243,9 +1559,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 三端同步：Forge / NeoForge / Fabric 共用同一套资源包路径约定
 - 测试 155 → 158
 
-***
+----
 
 **Texture-driven all structural elements**
+
 - Context menu (bg + borders), @ mention popup, copy toast, whisper mode bar now render from textures
 - Config screen: full background, tree/option/preview dividers, both scrollbars (track/thumb via alpha channel)
 - Emoji (tab bar / divider / content), quick-chat (panel / input), search (panel / input), settings menu backgrounds unified
@@ -1254,11 +1571,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - Synced across Forge / NeoForge / Fabric with one resource-pack path convention
 - Tests 155 → 158
 
-***
-
 ## v2.2.4
 
 **纹理驱动 UI（资源包可覆盖）**
+
 - 面板结构元素从硬编码色块改为纹理渲染：面板背景 / 标题栏 / 底栏 / 侧边栏背景 / 分割线 / 输入框背景 / 滚动条轨道与滑块
 - 纹理路径约定：`assets/e33chat/textures/gui/{dark|light}/panel_bg.png` 等——丢进资源包即可覆盖任意元素外观（渐变、图案、配色都可以）
 - 默认纹理由代码生成（主题色烘焙），零资源包时视觉完全不变；资源包覆盖自动优先
@@ -1268,9 +1584,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 测试 151 → 155
 - **资源包热重载**：游戏内 F3+T 或切换资源包后 UI 纹理立即跟随更新，无需重启游戏
 
-***
+----
 
 **Texture-driven UI (resource-pack overridable)**
+
 - Panel elements switched from hardcoded color fills to texture rendering: panel background / title bar / bottom bar / sidebar background / dividers / input background / scrollbar track & thumb
 - Path convention: `assets/e33chat/textures/gui/{dark|light}/panel_bg.png` etc. — drop files into a resource pack to override any element (gradients, patterns, custom colors)
 - Default textures are code-generated (theme colors baked); zero visual change without a resource pack; resource-pack overrides take priority automatically
@@ -1280,11 +1597,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - Tests 151 → 155
 - **Hot reload**: UI textures re-register on F3+T / resource-pack switch — no restart needed
 
-***
-
 ## v2.2.3
 
 **聊天记录改造**
+
 - 时间戳从"时分秒"升级为完整时间（epoch millis，含日期）：聊天面板时间分隔线当天显示 `15:30`，隔天显示 `07-31 15:30`，跨年显示 `2025-12-31 15:30`（微信同款）
 - 记录文件改为**纯文本日志格式**（每行 `时间	发送者	内容	标记`，记事本直接可读；标记 M=自己 S=系统 W=私聊），原子写入（先写临时文件再替换，写到一半崩溃不会损坏文件）
 - **崩溃保护**：每 30 秒自动保存一次，游戏崩溃/闪退最多丢 30 秒的聊天记录（此前只在换世界/退服时保存，崩溃全丢）
@@ -1294,9 +1610,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 敏感命令不进历史记录（`/login` `/register` 等含凭据命令写入时跳过）
 - 历史记录保留天数（`history_retention_days`，0 = 永久保留）：进入世界时自动删除超过保留期的历史文件
 
-***
+----
 
 **Chat history rework**
+
 - Timestamps upgraded from time-of-day to full epoch millis (with date): the chat separator shows `15:30` same-day, `07-31 15:30` next-day, `2025-12-31 15:30` across years (WeChat-style)
 - History files switched to a **plain-text log format** (one line per message: `time\tsender\tcontent\tflags`, readable in any text editor; flags M=own S=system W=whisper), written atomically (tmp file + replace, a crash mid-write never corrupts the file)
 - **Crash protection**: auto-save every 30 seconds — a crash now loses at most 30s of chat (previously only saved on world switch / quit, so crashes lost everything)
@@ -1306,16 +1623,16 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - Sensitive commands never land in the history file (`/login` `/register` and similar credential-carrying commands are skipped when written)
 - History retention days (`history_retention_days`, 0 = keep forever): history files older than the limit are deleted automatically on world join
 
-***
-
 ## v2.2.2
 
 **消息预览改为原版聊天框**
+
 - 删除自定义 HUD 消息预览（约 140 行，含 PreviewEntry/tickPreview/buildPreviewText），原版 `ChatComponent` 恢复渲染并上移 8px 避开 HUD 聊天图标
 - 兼容性红利：ChatHeads、ChatAnimation 等改造原版聊天框的 mod 自动生效（此前被 E33Chat 取消渲染）
 - 删除配置项：`preview_enabled` / `preview_lines` / `preview_width`（旧配置自动忽略）
 
 **原版聊天框统一消息格式**
+
 - 私聊消息（进/出/自己）显示为 `<发送者>[私聊] 内容` 玩家格式，替代原版系统格式（"你悄悄地对 X 说：..."）
 - 引用回复显示为 `<发送者>[引用] 内容`（黄色标签）——引用走普通聊天通道，靠 echo 记录携带引用标记识别
 - 发送者名字保留服务器前缀装饰与团队颜色（如 `[称号]E33EPUS`）
@@ -1323,17 +1640,20 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 原版系统格式的消息全部抑制，不再混显
 
 **其他**
+
 - 高级页新增"自我私聊通知"（`own_whisper_notify`，默认关）：给自己发 /msg 时是否弹横幅与音效（测试用）
 - 测试 92 → 120 例：新增私聊内容提取、引用标记传递、repost 去重、装饰名模板提取（中英各 2 种）
 
-***
+----
 
 **Message preview replaced by vanilla chat**
+
 - Custom HUD message preview removed (~140 lines: PreviewEntry/tickPreview/buildPreviewText); vanilla `ChatComponent` renders again, shifted 8px up to clear the HUD chat icon
 - Compatibility bonus: mods that restyle the vanilla chat (ChatHeads, ChatAnimation) work automatically (previously cancelled by E33Chat)
 - Removed config keys: `preview_enabled` / `preview_lines` / `preview_width` (old configs are ignored)
 
 **Unified vanilla-chat message format**
+
 - Whispers (in/out/self) now show as `<sender>[私聊] content` instead of the vanilla system line ("You whisper to X: ...")
 - Quote replies show as `<sender>[引用] content` (yellow tag) — quotes travel the plain-chat channel, identified via a quote flag carried on the echo record
 - Sender names keep server prefix decorations and team colors (e.g. `[称号]E33EPUS`)
@@ -1341,28 +1661,28 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - Vanilla system-format lines are fully suppressed, no mixed display
 
 **Other**
+
 - Advanced tab: new "Self-Whisper Notification" (`own_whisper_notify`, default off) — banner + sound when you /msg yourself (testing aid)
 - Tests 92 → 120: whisper content extraction, quote-flag propagation, repost dedup, decorated-name template extraction (2 zh + 2 en)
-
-***
 
 ## v2.2.1
 
 **修复**
+
 - 提及横幅渲染到聊天面板之上（此前被面板遮挡）
 - 压缩 mod logo，减小 jar 体积
 
-***
+----
 
 **Fixes**
+
 - Mention banner renders above the chat panel (was previously covered by it)
 - Compressed mod logo, smaller jar
-
-***
 
 ## v2.2.0
 
 **面板背景模糊**
+
 - 聊天面板背景可选是否启用模糊效果（`glBlitFramebuffer` 多 pass 降采样，兼容 Oculus/Embeddium）
 - 面板不透明度可调（0-100%，默认 60%）
 - 配置项：`blur_enabled`（开关）、`panel_opacity`（0-100）
@@ -1404,6 +1724,7 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 62 → 92 例：删除同义反复的侧边栏假测试，新增格式解析/整词边界/私聊格式/Animation 真覆盖
 
 **配置界面重做与 HUD 未读红点**
+
 - 设置界面按 UI 元素重排为 5 个标签页（聊天框 / HUD / 通知 / 侧边栏 / 高级），各页内再分子分类
 - 左侧改为可折叠、可滚动的子分类树（全展开时不再被挤出屏幕）；右侧分区标题去掉黑底橙字，改为灰字左对齐 + 右侧延伸细线，行高与选项对齐
 - 颜色行新增行内预设色板；“气泡与字体”子分类新增气泡预览带，随圆角实时变化
@@ -1415,7 +1736,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 标签页与选项列表加常驻滚动条与缓出平滑滚动：可拖拽滑块、点击轨道翻页
 - HUD 未读指示器换成与侧边栏私聊同款的跳动红点：裁出红点 nearest 放大后骑在聊天图标右上角
 
+----
+
 **Panel background blur**
+
 - Optional blur effect behind the chat panel (GL blit multi-pass downscale, compatible with Oculus/Embeddium)
 - Configurable panel opacity (0-100%, default 60%)
 - Config options: `blur_enabled` (toggle), `panel_opacity` (0-100)
@@ -1457,6 +1781,7 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 62 → 92 cases: tautological sidebar tests removed; real coverage added for format parsing, word boundaries, whisper formats and Animation
 
 **Settings UI rebuild & HUD unread dot**
+
 - Settings regrouped into 5 UI-element tabs (Chat Screen / HUD / Notifications / Sidebar / Advanced), each with sub-categories
 - The left column is now a collapsible, scrollable sub-category tree (a fully expanded tree no longer overflows the screen); right-side section headers drop the black bar / orange text for a gray left-aligned label with a trailing hairline, row height matched to options
 - Color rows gain an inline preset palette; the Bubbles & Text sub-category gains a bubble preview band that follows the corner radius live
@@ -1471,68 +1796,87 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v2.1.9
 
 **Quark 兼容（仅物品分享）**
+
 - 分享物品图标：聊天栏分享物品时，消息旁渲染物品图标（通过 HoverEvent.SHOW_ITEM 检测，任何使用标准物品分享机制的 mod 均适用）
 - 表情按钮：暂不支持。Quark 表情按钮通过 Mixin 注入 `ChatScreen`，E33Chat 因类加载器冲突（log4j `MessageSupplier` LinkageError）无法继承 `ChatScreen`，表情按钮需额外方案
 
 **Crash 修复**
+
 - ModernUI 兼容：`renderLineWithClicks` 字符索引越界，ModernUI 文本引擎访问的字符索引超出样式列表长度，增加边界检查解决
 - ChatScreen 继承回退：`extends ChatScreen` 在 Quark 等 mod 触发事件监听器时引发 log4j `MessageSupplier` 类加载器冲突（LinkageError），回退为 `extends Screen`
 
 **Mod 描述编码**
+
 - `gradle.properties` 添加 `-Dfile.encoding=UTF-8`，修复 mod 描述中文乱码
 
+----
+
 **Quark compatibility (item sharing only)**
+
 - Item sharing icons: shared items in chat now render with item icons next to messages (via HoverEvent.Action.SHOW_ITEM detection, compatible with any mod using the standard item-sharing pattern)
 - Emote buttons: not supported. Quark's emote buttons are injected via Mixin targeting `ChatScreen`; E33Chat cannot extend `ChatScreen` due to a log4j classloader conflict (`MessageSupplier` LinkageError). Emote buttons require a separate integration approach.
 
 **Crash fixes**
+
 - ModernUI compat: added bounds check in `renderLineWithClicks` — ModernUI's text engine visits more character indices than the styles list, causing ArrayIndexOutOfBoundsException
 - Reverted `extends ChatScreen`: triggered log4j `MessageSupplier` classloader conflict (LinkageError) when Quark fires mod event listeners; reverted to `extends Screen`
 
 **Mod description encoding**
+
 - Added `-Dfile.encoding=UTF-8` to `gradle.properties` to fix Chinese character encoding in mod description
 
 ## v2.1.8
 
 **通知横幅重设计**
+
 - SDF 圆角渲染：横幅从平直矩形改为圆角（可配置半径 0-10），带投影
 - 类型前缀：@提及显示 [@]、引用回复显示 [回复]、私聊显示 [私聊]，bake 进 `labeledName` 统一排版
 - easeOutBack 过冲动画：横幅滑入带弹性过冲效果，视觉更活泼
 - 移除左边色条，头像位置微调
 
 **配置界面重组**
+
 - 主题按钮改用 `Component.translatable()` 加载翻译 key
 - 预览行数从循环按钮改为 3-10 数字输入框
 - 通知标签页拆分为"@与引用"和"私聊"两个子区域，添加 `banner_corner_radius` 配置
 - 渲染循环增加区域分隔线
 
 **ClickEvent 修复**
+
 - issue #9：`renderLineWithClicks` 中父级 ClickEvent 不会自动传播到子级字符样式，增加 fallback 合并逻辑——无 ClickEvent 的 span 从父级继承
 
 **私聊点击放宽**
+
 - tell-click 玩家名长度限制从 32 放宽为 `max(32, text.length()/3)`，适应长昵称
 
+----
+
 **Notification banner redesign**
+
 - SDF rounded corners via `RoundRectRenderer.fill()` with custom GLSL shader, configurable radius (0-10), plus drop shadow
 - Type prefixes baked into `labeledName`: [@] for mention, [回复] for quote reply, [私聊] for whisper
 - easeOutBack overshoot animation: `1 + c*(t-1)³ + c*(t-1)²` with c=1.70158
 - Removed left color bar, adjusted avatar position
 
 **Config screen reorganization**
+
 - Theme button uses `Component.translatable()` for proper localization
 - `preview_lines` changed from cycle button to 3-10 integer input field
 - Notifications tab split into "@与引用" and "私聊" sub-sections, added `banner_corner_radius`
 - Section dividers in render loop
 
 **ClickEvent fix**
+
 - Issue #9 (Lucid Advancements compat): fallback ClickEvent from parent component now merges into child spans that lack their own ClickEvent
 
 **Tell-click limit relaxed**
+
 - Player name length limit for tell-click detection relaxed from 32 to `max(32, text.length()/3)` for long nickname servers
 
 ## v2.1.7
 
 **架构拆分：ChatBubbleScreen 2125→1600 行**
+
 - 提取 `ChatScrollbar`：滚动条渲染、拖拽、alpha 淡入淡出
 - 提取 `ChatContextMenus`：右键菜单（复制/引用/TP/私聊）
 - 提取 `ChatBars`：标题栏 + 底部栏渲染
@@ -1540,12 +1884,16 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 提取 `ChatMessageRenderer`：消息泡泡渲染、换行、时间分隔符、可点击文本
 
 **测试基础设施**
+
 - 新增 `ChatScrollbarTest`（13 个）：thumb 高度/位置、alpha 状态、hover 判定
 - 新增 `ChatMessageRendererTest`（10 个）：timeKey 取整、findClickStyle 遍历
 - 新增 `ChatContextMenusTest`（7 个）：菜单位置 clamp、点击判定
 - debugLog 改为 Supplier 延迟求值
 
+----
+
 **Architecture split: ChatBubbleScreen 2125→1600 lines**
+
 - Extracted `ChatScrollbar`: scrollbar rendering, drag, alpha fade
 - Extracted `ChatContextMenus`: right-click menus (copy/quote/TP/whisper)
 - Extracted `ChatBars`: title bar + bottom bar rendering
@@ -1553,6 +1901,7 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - Extracted `ChatMessageRenderer`: bubble rendering, word wrap, time separators, clickable text
 
 **Test infrastructure**
+
 - Added `ChatScrollbarTest` (13 tests): thumb height/position, alpha states, hover detection
 - Added `ChatMessageRendererTest` (10 tests): timeKey rounding, findClickStyle traversal
 - Added `ChatContextMenusTest` (7 tests): menu position clamping, click detection
@@ -1561,33 +1910,43 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v2.1.6
 
 **通知横幅修复**
+
 - 空玩家名崩溃：服务端插件发送的广播消息（无 sender UUID）不再触发 NPE
 - isOwn 颜色编码：`isOwn` 判定中的 color code 格式消息正确关联到发送者
 - 横幅双重 tick：修复 `tick()` 内 banner 计时被调用两次导致加速消失的问题
 
 **通知横幅重构**
+
 - 提取 `MentionNotificationController` 为独立控制器，队列管理与渲染解耦
 - 提取 `MentionNotificationBanner` 为独立横幅组件
 
+----
+
 **Banner crash fix**
+
 - Empty player name crash: broadcast messages from server plugins (no sender UUID) no longer trigger NPE
 - isOwn color code bug: color-code formatted messages now correctly associate with sender for `isOwn` detection
 - Banner double-tick: fixed banner timer being ticked twice per frame causing accelerated dismissal
 
 **Banner refactor**
+
 - Extracted `MentionNotificationController` as standalone controller, decoupling queue management from rendering
 - Extracted `MentionNotificationBanner` as standalone banner component
 
 ## v2.1.5
 
 **@Mention 通知系统**
+
 - 手机同款通知横幅：被 @ 时从屏幕顶部滑入，4 秒后自动消失，多条排队依次显示
 - @ 高亮：聊天泡泡中 @你 的消息文本变色（默认金黄 #FFD700）
 - 场景区分：聊天打开时仅高亮+音效，关闭时横幅+音效
 - 词边界检测：@PlayerName 精确匹配，不误触发 @PlayerName123
 - 配置项：横幅开关/颜色/时长、高亮开关/颜色、音效开关、@ 前缀要求
 
+----
+
 **@Mention notification system**
+
 - Phone-style notification banner: slides in from top of screen when mentioned, auto-dismisses after 4s, multiple mentions queued
 - @highlight in chat bubbles: mentioned messages get distinct text color (default gold #FFD700)
 - Context-aware: highlight+sound only when chat is open, banner+sound when closed
@@ -1597,24 +1956,31 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v2.1.4
 
 **NCR 插件改装广播误识别修复**
+
 - player line parser 增加聊天分隔符检查：要求玩家名和内容之间至少有一个聊天分隔符（`:`、`：`、`>`、`»`），纯空格分隔视为广播而非聊天
 - 修复 `[+] PlayerName 加入了游戏` 等插件改装加入消息被误渲染为聊天气泡的问题（离开消息因翻译键存活不受影响）
 - 纵深防御层序优化：tell-click（结构级，读 clickEvent）提至 player line parser（文本级，正则匹配）之前，确定性强的防线先行，覆盖 `handleSystemMessage` 和 `handleDisguisedChatMessage` 两条路径
 
 **NCR 私聊多道防线**
+
 - `handleDisguisedChatMessage` 增加关键词私聊检测兜底：chat type 被 NCR 剥离后，通过 whisper 关键词 + 在线/离线玩家名扫描识别私聊，覆盖 `detectWhisperInSystemMessage` 已有的离线缓存能力
 
+----
+
 **NCR plugin broadcast misclassification fix**
+
 - Player line parser now requires at least one chat-specific separator (`:`, `：`, `>`, `»`) between player name and content; whitespace-only gaps are treated as broadcasts
 - Fixes plugin-modified join messages like `[+] PlayerName joined the game` being rendered as chat bubbles
 - Defense layer reorder: tell-click (structural, reads clickEvent) now runs before player line parser (text-level heuristic) in both `handleSystemMessage` and `handleDisguisedChatMessage`
 
 **NCR whisper multi-layer defense**
+
 - Added keyword-based whisper fallback in `handleDisguisedChatMessage` for servers that strip chat type, reusing existing `detectWhisperInSystemMessage` with online + cached-offline player coverage
 
 ## v2.1.3
 
 **私聊系统审计修复**
+
 - 回波抑制不再基于时间盲吞：发出私聊后，检查系统消息中是否出现其他在线玩家名来决定抑制还是放行，避免误吞别人的私聊
 - 排除私聊目标名：回波中目标玩家名不再导致误判
 - 玩家名匹配改用 `nameCandidates`：昵称服 display name 变体也能正确识别
@@ -1623,7 +1989,10 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 新增 `/whisper` 命令支持
 - debugLog 改为延迟拼接，日志关时不产生额外开销
 
+----
+
 **Whisper system audit & fixes**
+
 - Echo suppression no longer uses blind time window — incoming system messages are checked for other online player names before suppressing, preventing accidental swallow of incoming whispers
 - Whisper target name excluded from echo check
 - Player name matching upgraded to `nameCandidates` for nickname-server display name variants
@@ -1635,29 +2004,39 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v2.1.2
 
 **侧边栏玩家名黑名单**
+
 - 新增设置项"侧边栏隐藏规则"：支持通配符模式（`*`），匹配的玩家名从侧边栏私聊列表隐藏，解决 TAB 等 NPC 填位插件创建假玩家（`Islot_*`）干扰私聊列表的问题
 - 逗号分隔多规则，空默认不隐藏
 
 **配置标题与 mod 描述修正**
+
 - 配置界面标题从 "ChatBubble" 更正为 "E33Chat"
 - mod 描述改为从语言文件加载，支持多语言（中文：以聊天APP风格重铸原版聊天框 / 英文：Rebuilds the vanilla chat HUD in chat-app style）
 
+----
+
 **Sidebar player name blacklist**
+
 - New config option "Sidebar Hide Patterns": wildcard patterns (`*`) to hide matching player names from the sidebar whisper list, fixes fake NPC players (e.g. `Islot_*`) from TAB and similar tab-filler plugins cluttering the whisper list
 - Comma-separated patterns, empty by default (no hiding)
 
 **Config title & mod description fixes**
+
 - Config screen title corrected from "ChatBubble" to "E33Chat"
 - Mod description now loaded from lang files for proper localization (zh: 以聊天APP风格重铸原版聊天框 / en: Rebuilds the vanilla chat HUD in chat-app style)
 
 ## v2.1.1
 
 **离线玩家消息识别 + 格式解析鲁棒性**
+
 - 新增"见过玩家"缓存：所有实时识别/聊天历史的玩家自动记录（UUID + profile 名 + 显示名），在线名单查不到时用缓存回退。掉线/隐身/Tab 截断的玩家消息现在也能正确识别出气泡和真 UUID
 - 格式解析器放宽阈值：超长称号前缀（`[超级至尊VIP]Steve`）不再因长度被拒；短名（1-2 字符）在 `<a>` 角括号或 `[T]a:` 方括号+冒号结构下可靠识别，裸短名（无括号）仍保守拒绝
 - 不碰广播判定（join/death/advancement 仍是系统消息）、不碰去重层（自己回声消除不受影响）
 
+----
+
 **Offline player message recognition + parser robustness**
+
 - New "seen player" cache: every player seen in real-time chat and chat history is automatically recorded (UUID + profile name + display name). When the online player list misses (offline/vanished/Tab-truncated), the cache provides fallback identification — offline player messages now render as bubbles with real UUIDs
 - Format parser thresholds relaxed: long decorative title prefixes (`[SuperVIP]Steve`) no longer block recognition by length; short names (1-2 chars) are now reliably detected when wrapped in angle brackets (`<a>`) or bracket+colon structure (`[T]a:`). Bare short names without structure remain conservatively rejected
 - Broadcast classification untouched (join/death/advancement stay as system messages); dedup layer untouched (self-echo elimination unaffected)
@@ -1665,16 +2044,21 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v2.1.0
 
 **消息预览 / 强提示 重做**
+
 - 预览与强提示**保留带样式文本的颜色**：玩家消息、系统消息、mod 内置文本、昵称、称号前缀等，进预览/强提示时与聊天气泡里看到的颜色一致（不再被碾成白字）
 - 预览**每行独立淡出**：最老的消息先消失、新的后消失（不再全部一起消失）；开框时预览隐藏但计时继续
 - 强提示弹窗**开聊天框时也显示**（联机时别人触发的系统 / 被@ 消息，开着框也会盖在框上弹出）
 
 **出站彩色文本（`&` 颜色码）改为安全实现**
+
 - 不再把 `&` 转成 `§` 发送（那是被踢的根因，连单人原版服都踢）；改为**只在自己气泡本地上色**，原文（含 `&`）原样发出，**永不踢人**
 - 装了颜色插件的服会把 `&` 转色给所有人；没插件的服别人看到原样 `&`
 - `彩色文本 (& 颜色码)` 配置语义改为"本地解释"，**默认关闭**（避免 `B&B` / `Q&A` 这类正常 `&` 被本地上色）
 
+----
+
 **New**
+
 - **Message preview / strong-hint rework**
 - Preview and strong hint now **preserve styled text colors**: player messages, system messages, mod-built text, nicknames and title prefixes keep the same per-segment colors as in the chat bubbles (no longer flattened to white)
 - Preview lines **fade independently**: the oldest line disappears first, newer ones later (no longer all vanishing at once); the preview is hidden while chat is open but keeps counting down
@@ -1684,12 +2068,16 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v2.0.9
 
 **修复**
+
 - 修复消息里的换行符被渲染成 "LF" 方块：聊天列表（气泡 + 灰字系统行）现在把 `\n` 渲染成**真正的换行**，多行公告正常多行显示，并保留每段样式与点击/悬浮事件
 - 服务器用纯换行刷屏清屏的消息直接丢弃（不再产生空气泡 / 预览 / 提示）
 - 修复"消息预览"逻辑，对齐原版聊天框：计时**锚定最后一条消息**、每个 tick 都扣（开框也扣、不冻结），5 秒末衰减淡出；关框时若距最后一条仍在 5 秒内就显示剩余时间、到点消失，早就过期则关框也不闪。与强提示**互斥**：默认开强提示时，系统/被@消息只弹强提示、不续预览；自己发送会续预览。预览单行、含自己与私聊
 - 所有单行场合（预览 / 强提示 / 侧栏最近消息 / 引用横幅）把 `\n` 转空格，杜绝 LF 方块
 
+----
+
 **Fix**
+
 - Fixed message newlines rendering as "LF" boxes: the chat list (bubbles + gray system lines) now renders `\n` as **real line breaks**, so multi-line announcements show on multiple lines, preserving each run's style and click/hover events
 - Server chat-clear messages made of nothing but newlines are now dropped entirely (no empty bubble / preview / hint)
 - Reworked the message preview to match the vanilla chat log: the countdown is **anchored to the last message** and ticks every game tick (also while chat is open — not frozen), fading out at the end; closing chat shows the remaining time only if the last message was within 5s, otherwise nothing flashes. **Mutual exclusion** with the strong hint: with the strong hint on (default), system / @mention messages only pop the strong hint and don't extend the preview; your own messages do extend it. The preview is single-line and includes own + whisper messages
@@ -1698,117 +2086,165 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v2.0.8
 
 **修复**
+
 - 头像加载：正版玩家自己的头像和在线玩家头像之前长时间卡在 Steve/Alex（身体皮肤却正常）。原因是首次查询拿到的默认皮肤被缓存后再也不刷新——`PlayerInfo.getSkinLocation()` 首次返回默认皮肤并异步下载，完成后才原地更新，但我们把首次的默认值缓存死了。现在在线玩家每帧读最新皮肤，下载完成后头像即跟上（CSL 皮肤同样走这条路）。离线/崩溃端玩家本就没有皮肤可取，仍为默认（属预期，除非 CSL 本地皮肤）
 - 菜单里「搜索」项的图标之前写死成齿轮（settings），是早期 search 图标没画好时的占位，从没改回来。现在正确显示 search 图标
 
 **新增**
+
 - 配置项「彩色文本 (& 颜色码)」（默认关闭）：控制发送时是否把 `&c`/`&l` 等转成 § 富文本。默认关闭，因为很多服务器会拒绝 § 字符并踢人——2.0.5 的转换由此改为可选，需要时在「行为」分类开启
 
+----
+
 **Fix**
+
 - Head loading: a paid-account player's own head and other online players' heads used to stay stuck on Steve/Alex for a long time even though the body skin was correct. Cause: the first lookup returned the default skin, which got cached and never refreshed — `PlayerInfo.getSkinLocation()` returns the default and downloads asynchronously, only updating in place when done, but we cached that initial default. Online players' skins are now read fresh each frame, so the head catches up once the download finishes (CSL skins flow through the same path). Offline/cracked players have no skin to fetch and stay on the default (expected, unless CSL provides a local skin)
 - The "Search" item in the menu had its icon hardcoded to the gear (settings) — a leftover placeholder from when the search icon hadn't been drawn yet, never changed back. It now shows the search icon correctly
 
 **New**
+
 - "Color Codes (& codes)" config option (default off): controls whether `&c`/`&l` etc. are converted to § rich text on send. Off by default because many servers reject the § character and kick — the 2.0.5 conversion is now opt-in; enable it under the "Behavior" category when needed
 
 ## v2.0.7
 
 **新增**
+
 - 服务端配置 `use_tpa`（`e33chat-server.toml`，默认 false）：开启后右键玩家头像菜单的传送改用 `/tpa`（请求式）而非 `/tp`。设置进服时同步给客户端，菜单标签随之显示"请求传送"；未收到同步（单人/服务器没装 mod）回退 `/tp`
 
+----
+
 **New**
+
 - Server config `use_tpa` (`e33chat-server.toml`, default false): when enabled, the player-head menu teleports via `/tpa` (request) instead of `/tp`. The setting is synced to clients on join and the menu label switches to "Request TP"; without a sync (singleplayer / server without the mod) it falls back to `/tp`
 
 ## v2.0.6
 
 **优化**
+
 - 配置界面排版重排：按功能聚合、开关在前细节在后。音效并入「通知与音效」分类，「兼容」分类撤销（仅剩的 debug_log 移入新「高级」分类）
 
+----
+
 **Polish**
+
 - Config screen reordered: options grouped by function with toggles before their detail params. Sound merged into "Notifications & Sound"; the "Compat" category is retired (its only remaining item, debug_log, moves to a new "Advanced" category)
 
 ## v2.0.5
 
 **新增**
+
 - 发送消息支持 `&` 颜色/格式码：输入 `&c`、`&l`、`&o` 等（同 § 码表，0-9a-fk-or）发送时转成富文本。仅 `&` 后跟有效码字符才转换，单独的 `&`（如 `tom & jerry`）不受影响。注意：是否生效取决于服务器——很多服会剥掉 § 码或要求权限，Essentials 类插件可能自行转换 `&`
 
+----
+
 **New**
+
 - Outgoing messages now support `&` color/format codes: typing `&c`, `&l`, `&o`, etc. (same code set as §, 0-9a-fk-or) is translated to rich text on send. Only `&` followed by a valid code char is converted; a bare `&` (e.g. `tom & jerry`) is left alone. Note: whether it takes effect is up to the server — many strip § codes or require permission, and Essentials-style plugins may convert `&` themselves
 
 ## v2.0.4
 
 **新增**
+
 - 配置项"保留已输入文本"：控制关闭聊天框时是否保留输入框里未发送的文本（默认开启，与之前行为一致）
 
+----
+
 **New**
+
 - "Preserve Typed Text" config option: controls whether unsent text in the input box is kept when chat closes (default on, matching prior behavior)
 
 ## v2.0.3
 
 **修复**
+
 - 恢复进度完成消息的悬浮描述：原版进度名带 HoverEvent（悬停显示进度详情），mod 之前只追踪带点击事件的文本段，进度名被漏掉导致悬浮窗失效。现在带悬浮事件的文本段也被追踪
 
+----
+
 **Fix**
+
 - Restored hover descriptions on advancement messages: vanilla advancement names carry a HoverEvent (tooltip with advancement details), but the mod only tracked text segments with click events, so advancement names were skipped and the tooltip broke. Segments with hover events are now tracked too
 
 ## v2.0.2
 
 **修复**
+
 - 头像皮肤渲染兼容 CustomSkinLoader：离线玩家/NCR 纯文本玩家不再固定回退 Steve/Alex。未知玩家改走原版 SkinManager 按名字查询（CSL 按名字接管，导入的离线皮肤可正确显示；未装 CSL 时回退原版——正版玩家正常、离线回退默认）
 - 头像皮肤按 UUID 缓存，不再每帧重复查询 SkinManager
 
+----
+
 **Fix**
+
 - Head skin rendering now compatible with CustomSkinLoader: offline players / NCR plain-text players no longer always fall back to Steve/Alex. Unknown players are resolved through the vanilla SkinManager keyed by name (CSL intercepts by name, so imported offline skins display correctly; without CSL it falls back to vanilla — real skins for paid accounts, default otherwise)
 - Head skins cached per UUID instead of re-querying the SkinManager every frame
 
 ## v2.0.1
 
 **NCR 兼容（常态生效）**
+
 - 移除"禁用聊天举报兼容"配置开关，玩家识别默认启用（大部分服务器只装 NCR 但不了解这个开关，导致玩家消息全部渲染成系统灰字）
 - 提取 MessagePresentation 格式解析器（纯函数 + 单元测试）：按在线玩家名锚点 + 通用分隔符识别，支持 `Steve: hi`、`<Steve> hi`、`Steve >> hi`、`[VIP]Steve: hi`、`<[VIP]Steve> hi`、全角冒号 `Steve： 你好`、`Steve » hi` 等格式，名字按长度降序匹配避免前缀名误抢
 - 分层识别：私聊检测前置（修复私聊被误判成公屏气泡）→ 格式解析 → tell-click 归属 → 系统消息兜底
 - disguised 通道：发送者名为空时也尝试按格式解析，救回该类玩家消息
 
 **修复**
+
 - 输入框开关面板动画期间不跟随面板移动
 
+----
+
 **NCR compat (always active)**
+
 - Removed the "No Chat Reports compat" config toggle; player detection is now always on (most servers run NCR without users knowing about the toggle, leaving every player message rendered as gray system text)
 - Extracted MessagePresentation format parser (pure function + unit tests): anchors on online player names + generic separator detection; handles `Steve: hi`, `<Steve> hi`, `Steve >> hi`, `[VIP]Steve: hi`, `<[VIP]Steve> hi`, full-width colon `Steve： 你好`, `Steve » hi`, etc. Names matched longest-first to prevent prefix-name misattribution
 - Layered detection: whisper check first (fixes whispers misclassified as public bubbles) → format parse → tell-click attribution → system fallback
 - Disguised channel: when the sender name is empty, still tries format parsing to recover those player messages
 
 **Fix**
+
 - Input box now follows the panel during the open/close animation
 
 ## v2.0.0
 
 **更名**
+
 - 显示名从 E33EPUS's ChatScreen 改为 **E33Chat**
 
-**Rename**
-- Display name changed from E33EPUS's ChatScreen to **E33Chat**
-
 **新增**
+
 - 服务端聊天历史分发：新玩家进服自动同步最近 50 条聊天记录
 
 **修复**
+
 - 关闭动画配置后侧边栏不再有动画，打开/关闭均为即时切换
 
+----
+
+**Rename**
+
+- Display name changed from E33EPUS's ChatScreen to **E33Chat**
+
 **New**
+
 - Server-side chat history: new players receive the last 50 messages on join
 
 **Fix**
+
 - Sidebar no longer animates when animation config is disabled
 
 ## v1.9.9
 
 **重构**
+
 - ChatBubbleScreen 拆分为 5 个类：ChatEmojiPanel（表情）、ChatQuickChatPanel（常用语）、ChatSettingsMenu（设置菜单）、ChatSearchPanel（搜索）、ChatBubbleScreen（编排层），从 2220 行瘦至 1945 行
 - drawTextureIcon / iconTex / BAR_H 改为包内可见，面板类直接引用
 - 修复 F3+T 资源重载后图标纹理丢失导致渲染崩溃的问题
 
+----
+
 **Refactor**
+
 - Split ChatBubbleScreen into 5 classes: ChatEmojiPanel (emoji picker), ChatQuickChatPanel (quick phrases), ChatSettingsMenu (gear menu), ChatSearchPanel (search bar), ChatBubbleScreen (orchestrator); reduced from 2220 to 1945 lines
 - drawTextureIcon / iconTex / BAR_H relaxed to package-private for panel access
 - Fixed icon texture crash after F3+T resource reload (missing try-catch in drawTextureIcon)
@@ -1816,27 +2252,37 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v1.9.8
 
 **新增**
+
 - 聊天搜索：浮动输入框，实时子串匹配，上下箭头/滚轮切换匹配项，黄色高亮边框，计数器显示
 - 设置菜单重铸：从 3 列横排改为 4 行竖排上拉，图标居左文字居右，英文字段自适应截断
 
 **修复**
+
 - 多条系统消息（tellraw）同时到达时强提示不再互相覆盖，改为排队依次显示
 
+----
+
 **New**
+
 - Chat search: floating input above bottom bar, real-time substring matching, up/down/scroll to cycle matches, yellow highlight border, match counter
 - Settings menu redesigned: vertical 4-row popup (was horizontal 3-col), icons left + text right, auto-truncate long English labels
 
 **Fix**
+
 - Multiple simultaneous system messages (tellraw) no longer overwrite each other's strong hint; now queued and displayed in sequence
 
 ## v1.9.7
 
 **音效**
+
 - 新增"音效"配置分类，四种消息类型可独立开关提示音：系统消息、@/引用消息、私聊消息、公屏消息
 - 默认 @/引用消息和私聊消息触发提示音，系统消息和公屏消息不触发
 - 防刷屏选项默认关闭
 
+----
+
 **Sound**
+
 - New "Sound" config category with independent notification sound toggles for 4 message types: system, @/quote, whisper, public
 - Default: @/quote and whisper trigger sounds, system and public do not
 - Anti-spam now defaults to off
@@ -1844,12 +2290,16 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v1.9.6
 
 **动画**
+
 - 聊天面板打开：背景不透明度渐入（easeOutCubic），关闭：淡出（easeInQuad）
 - 滚屏系统重构：壁钟驱动 easeOutCubic 丝滑动画，滚轮 40px/120ms，拖拽滑动块 80ms，底部自动滚屏 150ms
 - 滑动块自动浮现：滚动时显示，停止滚动 1 秒后淡出；悬停/拖拽时常驻
 - 新消息到达时列表底部丝滑滚屏，不再瞬移；首次打开直接跳底，无回弹动画
 
+----
+
 **Animation**
+
 - Panel open: background fades in (easeOutCubic), close: fades out (easeInQuad)
 - Scroll system rebuilt: wall-clock-driven easeOutCubic animations — wheel 40px/120ms, drag 80ms, auto-scroll 150ms
 - Scrollbar auto-appear: visible while scrolling, fades out 1s after stop; always visible on hover/drag
@@ -1858,11 +2308,15 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v1.9.5
 
 **重构**
+
 - 新增 `Animation` 工具类：统一 easeOutCubic/lerpTo/fadeIn/fadeOut/fadeInOut 动画函数
 - 新增 `UiLayout` 工具类：统一 centerX/clampX/clampW 布局计算
 - ChatBubbleScreen 和 ChatBubbleHudOverlay 动画计算统一使用 Animation 方法
 
+----
+
 **Refactor**
+
 - Added `Animation` utility class: unified easeOutCubic/lerpTo/fadeIn/fadeOut/fadeInOut animation functions
 - Added `UiLayout` utility class: unified centerX/clampX/clampW layout helpers
 - ChatBubbleScreen and ChatBubbleHudOverlay animation math now uses Animation methods
@@ -1870,13 +2324,17 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v1.9.4
 
 **优化**
+
 - renderMessages 消息列表遍历从三趟合并为两趟，减少重复迭代
 - 替换 indexOf 全列表查找为双指针扫描，消息索引查找从 O(v*m) 降为 O(m)
 - HUD 消息预览逐行独立淡出，旧行不再突然消失
 - 引用块改为微信风格：置于气泡下方、宽度独立跟随文本、单行省略号
 - 去掉聊天面板打开时的游戏背景变暗效果
 
+----
+
 **Optimizations**
+
 - Merged renderMessages height-calculation passes from two loops into one
 - Replaced per-message indexOf full-list scan with two-pointer tracking (O(v*m) → O(m))
 - HUD message preview now fades each line independently; old lines fade out instead of vanishing
@@ -1886,37 +2344,43 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v1.9.3
 
 **修复**
+
 - 强提示弹窗（热键栏上方的系统消息推送）现在正确保留文本颜色，与聊天气泡/消息预览一致
 - 面板宽度默认值提高到 1000 物理像素，最小值提高到 800（400 会挡住部分 UI）；面板宽度计算使用四舍五入避免 GUI 自动缩放下的像素偏差
 - 侧边栏玩家头像与频道图标对齐，滚动上限精确计算不再可无限滚出空白
 - 配置界面数字输入框自适应位数（面板宽度 4 位、预览宽度 3 位、圆角半径 2 位）
 
 **其他**
+
 - 多处 `printStackTrace` / `Exception ignored` 改为 `LogUtils.getLogger()` 统一日志输出
 - NeoForge 1.21.1 同步上述全部改动；两版代码基线合并
 
-***
+----
 
 **Fixes**
+
 - Strong hint popups (system message pushes above the hotbar) now correctly preserve text colors, matching chat bubbles and message preview
 - Panel width default raised to 1000 physical pixels, minimum raised to 800 (400 blocked parts of the UI); panel width calculation now rounds guiScale to avoid pixel drift under auto GUI scaling
 - Sidebar player avatars now align with the public channel icon; scroll bound is computed accurately and no longer scrolls endlessly into blank space
 - Config screen number inputs adapt their max length (4 digits for panel width, 3 for preview width, 2 for corner radius)
 
 **Other**
+
 - Replaced multiple `printStackTrace` / `Exception ignored` with `LogUtils.getLogger()` for unified logging
 - NeoForge 1.21.1 synced with all the above; both codebases merged to parity
 
 ## v1.9.2
 
 **修复**
+
 - 起床按钮回来了：睡觉时显示原版样式的"起床"按钮（v1.1 屏蔽睡觉强制聊天框时的误伤，此后一直无法提前起床）；ESC 直接起床，按 T 仍可打开聊天
 - 可点击文本的下划线在 ModernUI 等字体替换 mod 下不再过粗、错位、超出文本刺穿气泡边框——下划线改回由字体渲染器自绘（1.9.1 的手动补画在亚像素字宽下必然漂移），浮层防刺穿改为整体抬高浮层 z 层实现，顺带修复了删除线刮浮层的同类问题
 - 可点击文本的点击判定区域在 ModernUI 下不再右偏（同一根因）
 
-***
+----
 
 **Fixes**
+
 - The Leave Bed button is back: sleeping now shows a vanilla-style Leave Bed button (collateral damage of the v1.1 forced-chat-screen fix — getting up early had been impossible since); ESC wakes you up, T still opens chat
 - Underlines on clickable text no longer render too thick, misplaced, or overshooting past the bubble border under font-replacing mods (e.g. ModernUI) — underlines are drawn by the font renderer again (the 1.9.1 manual repainting inevitably drifts with sub-pixel advances); overlay bleed-through is now prevented by z-lifting overlays instead, which also fixes the same strikethrough issue
 - Click hitboxes on clickable text are no longer shifted right under ModernUI (same root cause)
@@ -1924,60 +2388,72 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v1.9.1
 
 **修复**
+
 - 自带下划线样式的消息（如 Xaero 路径点分享）不再出现双下划线，其下划线也不再刮破表情菜单等浮层——现在聊天列表中的所有下划线都由 mod 按绘制顺序自绘
 
-***
+----
 
 **Fixes**
+
 - Messages with intrinsic underline styling (e.g. Xaero waypoint shares) no longer show a double underline, and their underlines no longer bleed through overlay panels — all underlines in the chat list are now repainted by the mod in plain paint order
 
 ## v1.9
 
 **新功能**
+
 - 配置界面重做：左侧分类栏（外观/通知/行为/兼容），悬停选项名显示详细说明，调试日志开关加入界面
 - 配置项支持第三方配置界面（如 Configured）的本地化显示
 
 **修复**
+
 - 三处输入框（主输入、常用语、侧边栏搜索）文字垂直居中，占位符与输入文字位置完全一致，聚焦不再跳位
 - 可点击文本的下划线不再穿透浮层面板（此前打开表情菜单等浮层时会有一道"划痕"）
 - 发送指令不再生成本地气泡——与原版一致，指令文本不进聊天记录（私聊指令除外）
 
 **其他**
+
 - 配置文件注释全部改为英文（生态惯例）；文件结构与键名不变，现有配置无缝保留
 
-***
+----
 
 **New Features**
+
 - Reworked config screen: category sidebar (Appearance / Notifications / Behavior / Compat), hover an option name for a detailed description, debug log toggle now in the GUI
 - Config options now localize in third-party config UIs (e.g. Configured)
 
 **Fixes**
+
 - Text in all three input boxes (main input, quick chat, sidebar search) is now vertically centered; placeholder and typed text share the exact same position, no more jump on focus
 - Underlines on clickable text no longer bleed through overlay panels (previously visible as a "scratch" across the emoji panel and other overlays)
 - Sending a command no longer creates a local bubble — matching vanilla, command text stays out of the chat log (whisper commands excepted)
 
 **Misc**
+
 - Config file comments are now in English (ecosystem convention); file structure and keys unchanged, existing configs carry over seamlessly
 
 ## v1.8
 
 **消息分类重构**
+
 - 新增"翻译键"确定性分类层：私聊、公屏聊天、指令反馈、原版广播（进度/死亡/进出服）、OP 回显、/say、/me、队伍消息按原版翻译键精确路由，不再依赖文本内容猜测；键在 NCR/FreedomChat 转换后依然保留，因此转换服同样受益
 - 未知格式自动回落到原有启发式识别（插件自定义格式不受影响）
 
 **修复**
+
 - /tp、/kill 等指令的 OP 回显（`[名字: ...]`）不再被误判为该玩家的聊天气泡
 - 转换服上的私聊名字与内容直接取自消息结构（保留样式与颜色），且不再依赖客户端语言
 - 你发出私聊后 10 秒内对方的回复不再可能被回显抑制误吞
 - Xaero 地图路径点分享在聊天转换服务器上不再被渲染成气泡
 
-***
+----
 
 **Message Classification Rework**
+
 - New deterministic classification layer based on vanilla translation keys: whispers, public chat, command feedback, vanilla broadcasts (advancements / deaths / joins), op echoes, /say, /me, and team messages are routed by their exact translation keys instead of text guessing; keys survive NCR/FreedomChat conversion, so converted servers benefit equally
 - Unknown formats fall back to the existing heuristics (custom plugin formats unaffected)
 
 **Fixes**
+
 - Op echoes of commands like /tp and /kill (`[Name: ...]`) are no longer misattributed as that player's chat bubble
 - Whisper sender and content on converted servers are taken directly from the message structure (styles and colors preserved), independent of client language
 - A partner's reply within 10 seconds of your outgoing whisper can no longer be swallowed by echo suppression
@@ -1986,6 +2462,7 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v1.7
 
 **新功能**
+
 - 圆角气泡：SDF shader 实现，边缘逐像素抗锯齿，任意 GUI 缩放下均平滑
 - 新配置项"气泡圆角半径"（0-10，默认 4，0 = 原来的方角）
 - shader 加载失败时自动回退方角渲染，不影响使用
@@ -1995,14 +2472,17 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 默认配色更新：自己的气泡 #1E90FF 蓝底白字（仅对新生成的配置生效）
 
 **修复**
+
 - 聊天历史保存加固：单条消息序列化失败自动降级为纯文本，不再可能因一条异常消息丢失整个历史
 
 **其他**
+
 - 消息处理调试日志改为配置开关 `debug_log`（默认关闭）——正式版不再把聊天内容写入 latest.log，排查问题时可在配置文件中开启
 
-***
+----
 
 **New Features**
+
 - Rounded bubble corners: SDF shader with per-pixel anti-aliased edges, smooth at any GUI scale
 - New config option "Bubble Corner Radius" (0-10, default 4, 0 = classic square corners)
 - Automatically falls back to square rendering if the shader fails to load
@@ -2012,19 +2492,23 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - New default colors: own bubble #1E90FF with white text (applies to fresh configs only)
 
 **Fixes**
+
 - Chat history saving hardened: a message that fails to serialize degrades to plain text instead of aborting the save — one bad message can no longer wipe the whole history
 
 **Misc**
+
 - Message-pipeline debug logging is now gated behind the `debug_log` config option (off by default) — release builds no longer write chat content to latest.log; enable it in the config file when troubleshooting
 
 ## v1.6
 
 **新功能**
+
 - 服务器称号/前缀显示：插件添加的 `[称号]`/`[群组]` 等前缀现在带原色显示在玩家名旁，玩家消息与系统消息通道均支持，兼容 `[前缀]<名字>` 与 `<[前缀]名字>` 两种格式（提取失败自动回退裸名）
 - 自己的称号自己也可见——服务器回显到达后自动补全到本地气泡
 - 消息预览保留消息原有颜色与样式（称号颜色、mod 彩色文本等）
 
 **修复**
+
 - 回显记录改为 10 秒过期，且仅对聊天和 `/msg` `/tell` `/w` `/me` `/say` 记账——修复发送无回显指令后计数残留、误吞后续署名为自己的消息
 - 私聊回显旗标同样 10 秒过期——修复自定义私聊格式服务器上残留旗标可能误吞后续收到的私聊
 - 聊天历史现在保存带样式的发送者名（旧存档兼容读取）
@@ -2032,17 +2516,20 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 网络频道版本校验放宽（`acceptMissingOr`）——连接装了 Forge 但没装本 mod 的服务器不再可能被拒连，"服务端可选"更彻底
 
 **其他**
+
 - 身份判定（own/@提及/引用）与显示名解耦，装饰名不影响消息归属
 - 日志前缀统一为 `[e33chat]`
 
-***
+----
 
 **New Features**
+
 - Server title/prefix display: plugin-added prefixes like `[Title]`/`[Group]` now show next to player names with their original colors, on both player and system message channels, supporting both `[Prefix]<Name>` and `<[Prefix]Name>` formats (falls back to bare name if extraction fails)
 - Your own title is now visible to yourself — patched into the local bubble once the server echo arrives
 - Message previews keep original colors and styles (title colors, mod-colored text, etc.)
 
 **Fixes**
+
 - Pending echoes now expire after 10s and are only tracked for chat and `/msg` `/tell` `/w` `/me` `/say` — fixes stale counters from no-echo commands swallowing later self-attributed messages
 - Whisper echo flag also expires after 10s — fixes stale flag potentially swallowing incoming whispers on servers with custom whisper formats
 - Chat history now saves styled sender names (old saves still load)
@@ -2050,24 +2537,28 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - Relaxed network channel version check (`acceptMissingOr`) — joining Forge servers without this mod can no longer be rejected, making "server optional" truly hold
 
 **Misc**
+
 - Identity logic (own/@mention/quote) decoupled from display names — decorated names never affect message attribution
 - Log prefix unified to `[e33chat]`
 
 ## v1.5
 
 **新功能**
+
 - 颜色主题切换：深色（默认）/ 浅色，配置界面一键切换
 - 新增 `ChatBubbleTheme` 主题系统，所有 UI 颜色集中管理
 
-***
+----
 
 **New Features**
+
 - Color theme toggle: Dark (default) / Light, switchable in config screen
 - New `ChatBubbleTheme` system: all UI colors managed in one place
 
 ## v1.4
 
 **新功能**
+
 - 侧边栏搜索框：按名字筛选在线玩家
 - 右键头像菜单：传送 + 私聊快捷操作
 - 侧边栏无在线玩家插画
@@ -2077,15 +2568,17 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 消息预览宽度可配置（`preview_width`，50-400px）
 
 **修复**
+
 - 私聊输入框不再穿帮——`/msg` 拼接完全在背后完成
 - 私聊消息不再泄漏到公屏——系统回显三层拦截（标记→检测→吞除）
 - 私聊回复不再复读——本地显示与服务端转发完全隔离
 - 引用私聊消息不再错位——全量索引追踪，不受过滤视图影响
 - NCR 兼容开关开启/关闭均可正确处理私聊
 
-***
+----
 
 **New Features**
+
 - Sidebar search box: filter online players by name
 - Avatar right-click menu: Teleport + Whisper quick actions
 - No online players illustration in sidebar
@@ -2095,6 +2588,7 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - Configurable message preview width (`preview_width`, 50-400px)
 
 **Fixes**
+
 - Input box no longer exposes `/msg` — command splicing is fully behind-the-scenes
 - Whisper messages no longer leak to public chat — three-layer system echo suppression
 - Whisper replies no longer echo back — local display fully isolated from server forwarding
@@ -2104,14 +2598,16 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v1.3
 
 **新功能**
+
 - 私聊侧边栏：左侧在线玩家列表，显示头像+名字+最新私聊预览，点击切换私聊模式
 - 侧边栏收起/展开：标题栏左侧汉堡按钮，收起后聊天面板占满
 - 私聊过滤：点击玩家只显示与该玩家的私聊记录，顶部紫色模式指示条；点击"公屏"返回
 - 私聊发件隐形拼接：输入框不显示 `/msg`，发送时背后自动拼接，不露破绽
 
-***
+----
 
 **New Features**
+
 - Whisper sidebar: online player list on the left with avatar + name + latest whisper preview, click to switch to whisper mode
 - Sidebar toggle: hamburger button at the top-left of the title bar, chat panel fills width when collapsed
 - Whisper filtering: clicking a player shows only whisper messages with them, with a purple mode indicator bar; click "Public" to return
@@ -2120,22 +2616,27 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 ## v1.2
 
 **修复**
+
 - 修复标准服务器（未安装 No Chat Reports）开启 `chat_report_compat` 后，`[头衔] <玩家名>` 格式的服务器前缀/称号无法提取到发送者显示名的问题
 
 **新功能**
+
 - 消息区域右侧新增滚动条：显示当前位置、点击空白区域翻页、拖拽滑块滚动
 
-***
+----
 
 **Fixes**
+
 - Fixed server prefix/title extraction for standard servers (without No Chat Reports): when `chat_report_compat` is enabled, prefixes like `[VIP] <PlayerName>` in player chat messages are now correctly extracted to the sender display name
 
 **New Features**
+
 - Scrollbar on the right side of the message area: shows scroll position, click empty track to page up/down, drag thumb to scroll
 
 ## v1.1
 
 **修复**
+
 - 修复 Xaero 地图连续分享多个不同坐标后坐标丢失
 - 修复 emoji 码点截断导致的宽度测量错误（代理对字符如 😀 使用 `Character.toChars`）
 - 修复睡觉时聊天框无法关闭（阻止原版强制弹框，手动 T 键正常打开/ESC 关闭，醒来恢复原状态）
@@ -2143,16 +2644,19 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 修复醒来时 `setScreen` 跨线程崩溃（`PlayerWakeUpEvent` 服务端线程 → `mc.execute()`）
 
 **新功能**
+
 - Emoji 表情面板：双标签（😊 Emoji + ✧ 颜文字），点击插入输入框
 - 时间分隔符间隔可配置（`time_separator_minutes`，1/5/10/15/30分钟/关闭，默认 5 分钟）
 
 **UI**
+
 - 底栏新增 emoji 按钮，设置图标左移，输入框空间优化
 - @补全面板 70% 不透明度，表情面板完全不透明
 
-***
+----
 
 **Fixes**
+
 - Fixed Xaero map consecutive waypoint shares not displaying (removed aggressive `<>` dedup + changed `consumeEchoBySystemChat` from `contains` to `equals`)
 - Fixed emoji code point truncation causing width measurement errors (surrogate pair characters like 😀 now use `Character.toChars`)
 - Fixed chat screen unclosable during sleep (block vanilla forced open, T key works normally, ESC closes, restores state on wake)
@@ -2160,16 +2664,19 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - Fixed cross-thread crash on wake (`PlayerWakeUpEvent` on server thread → `mc.execute()`)
 
 **New Features**
+
 - Emoji picker panel: two tabs (😊 Emoji + ✧ Kaomoji), click to insert into input
 - Time separator interval configurable (`time_separator_minutes`, 1/5/10/15/30 min/off, default 5 min)
 
 **UI**
+
 - Bottom bar: emoji button added, gear icon shifted left, input box width optimized
 - @mention popup 70% opacity, emoji panel fully opaque
 
 ## v1.0
 
 **修复**
+
 - 修复 `ChatComponent.addMessage` 双重触发导致的@/引用重复音效
 - 引用提示音改为风铃声 (`NOTE_BLOCK_CHIME`)——和被@一致
 - 修复聊天框打开时强提示/弹窗被隐藏
@@ -2179,6 +2686,7 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 修复配置界面"兼容性选项"标题滚动时偏移不同步
 
 **UI 优化**
+
 - 气泡宽度完全跟随文本（去掉最小宽度限制），横向内边距 8→6，纵向 5→4
 - 头像位置对齐玩家名顶部
 - 标题栏顶部缝隙消除，底栏高度 30→26，输入框高度 20→14，图标 16→14
@@ -2187,6 +2695,7 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 动画改为 ease-out 三次方缓出
 
 **新功能**
+
 - 输入 `@` 弹出在线玩家名补全列表（Tab/Enter 选中，Esc 关闭）
 - 聊天记录按存档持久化（`chat_history` 配置，默认关闭）
 - 关闭聊天框后保留已输入文本
@@ -2194,13 +2703,15 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - 被@/引用播放风铃提示音
 
 **配置**
+
 - 新增 `chat_history`——保留每个存档的聊天记录
 - `anti_spam`、`chat_history` 描述精简
 - jar 命名格式改为 `e33chat-Forge-1.20.1-1.0`
 
-***
+----
 
 **Fixes**
+
 - Fixed double sound on @mention/quote caused by `ChatComponent.addMessage` dual trigger
 - Quote notification now uses `NOTE_BLOCK_CHIME` (same wind chime as @mention)
 - Fixed strong hints being hidden when chat screen is open
@@ -2210,6 +2721,7 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - Fixed config screen "Compatibility" header drifting on scroll
 
 **UI**
+
 - Bubble width follows text exactly (removed min width), padding X 8→6, Y 5→4
 - Avatar aligned to player name top
 - Title bar gap removed, bottom bar 30→26, input height 20→14, icons 16→14
@@ -2218,6 +2730,7 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - Animation switched to ease-out cubic
 
 **New Features**
+
 - `@` autocomplete popup with online player names (Tab/Enter to select, Esc to close)
 - Per-world chat history persistence (`chat_history` config, disabled by default)
 - Input text preserved when closing/reopening chat
@@ -2225,6 +2738,7 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 - Wind chime sound on @mention/quote
 
 **Config**
+
 - Added `chat_history` — saves chat history per world
 - Simplified `anti_spam` and `chat_history` labels
 - Jar naming: `e33chat-Forge-1.20.1-1.0`
@@ -2233,11 +2747,15 @@ Tests: Forge 310 / NeoForge 309 / Fabric 284 all green
 
 增强 `chat_report_compat` 匹配——改为扫描在线玩家列表而非要求 `<` 开头，支持服务器前缀/称号（如 `【称号】 <PlayerName> 消息`）。匹配到的前缀保留到发送者显示名中。修复服务端兼容性——客户端可加入无 mod 服务端，双端安装时服务端也不再因客户端类加载崩溃（`displayTest="NONE"` + 客户端初始化抽离到 `@OnlyIn(Dist.CLIENT)` 类）。
 
+----
+
 Enhanced `chat_report_compat` matching — scans for online player names instead of requiring `<` at string start, supporting server prefixes/titles (e.g. `【Title】 <PlayerName> message`). Prefix text preserved in sender display name. Fixed server compatibility — client can now join servers without the mod, and server no longer crashes from client class loading when installed on both sides (`displayTest="NONE"` + client init moved to `@OnlyIn(Dist.CLIENT)` class).
 
 ## v0.2.3-beta
 
 新增 `chat_report_compat` 配置项——开启后自动解析 `<玩家名>` 格式的系统消息，提取真实发送者和皮肤，兼容"禁用聊天举报"类模组。修复回显去重在 `system_chat_as_bubble=true` 时失效的问题。配置界面重组为「常规选项」和「兼容性选项」两个分组。
+
+----
 
 Added `chat_report_compat` config option — automatically parses `<PlayerName>` format system messages to extract real sender and skin, compatible with "No Chat Reports" type mods. Fixed echo dedup failing when `system_chat_as_bubble=true`. Config screen reorganized into two sections.
 
@@ -2245,11 +2763,15 @@ Added `chat_report_compat` config option — automatically parses `<PlayerName>`
 
 新增 `anti_spam` 配置项——连续相同消息合并为一条，黄色 `xN` 标注重复次数。修复悬停 tooltip 不渲染（进度信息等 HoverEvent）。修复聊天界面内点击事件（RUN_COMMAND）不弹出 GUI 的问题。修复配置界面标签错位。
 
+----
+
 Added `anti_spam` config option — consecutive identical messages merge into one with yellow `xN` count label. Fixed hover tooltips not rendering (advancement info, etc.). Fixed click events (RUN_COMMAND) not opening GUI while chat screen is active. Fixed swapped config labels.
 
 ## v0.2.1-beta
 
 新增配置项 `system_chat_as_bubble`（默认关闭）——开启后所有系统消息也渲染为聊天气泡。修复伪装聊天通道（`handleDisguisedChatMessage`）的去重失效问题，改用发送者身份匹配替代内容 hash 匹配；同时伪装聊天的 `isSystem` 改为根据 `bound.name()` 自动判断。
+
+----
 
 Added `system_chat_as_bubble` config option (off by default). Fixed echo deduplication for disguised chat channel — replaced content hash matching with sender identity matching. Disguised chat messages now auto-detect system vs player via `bound.name()`.
 
@@ -2257,22 +2779,67 @@ Added `system_chat_as_bubble` config option (off by default). Fixed echo dedupli
 
 重构了聊天消息拦截架构——不再 cancel 原版消息处理管线，而是改在 `ChatComponent.addMessage` 末端捕获所有 mod 处理后的最终消息，从根本上解决了与其他 mod（Xaero、FTB Team 等）的兼容性问题。系统消息的点击事件（如 FTB 邀请的"接受/拒绝"按钮）现在完整保留；Xaero 路径点分享正确显示为系统消息，点击事件正常；局域网开放提示不再丢失；重写去重机制，用待消费回显队列替代内容扫描，自己连续发重复消息不会被误吞。
 
+----
+
 Rebuilt the chat interception architecture — instead of cancelling the vanilla message pipeline, messages are now captured from `ChatComponent.addMessage` after all mods have processed them, resolving compatibility issues with other mods (Xaero, FTB Teams, etc.) at the root. Click events on system messages (e.g. FTB invite accept/decline buttons) are fully preserved. Xaero waypoint sharing displays correctly as a system message with working click actions. LAN "Open to LAN" notifications no longer lost. Deduplication rewritten with a pending-echo queue instead of content scanning — sending the same message twice in a row no longer swallows the second one.
 
 ## v0.1.8-beta
+
+**新增**
+
+- **通知栏** — 聊天里向上滚动时，输入框上方出现一条横栏：左侧显示「x 条新消息」，右侧显示「有人提到了你」（黄字，点击跳转）。
+- **@提及强提示** — 被 @ 或被引用时，快捷栏上方弹出强提示（黄字「有人提到了你」），由新增配置项 `mention_strong_hint` 控制。
+- **点头像 @提及** — 在聊天里左键点击任意玩家头像（含自己的），把 `@玩家名` 插入输入框。
+- **网络层** — 引用与 @提及的元数据改为通过数据包在玩家之间同步（`ChatMetaPacket`、`QuoteSyncPacket`）。本 mod 从此**要求客户端与服务端都安装**。
+- **世界检测重构** — 逐 tick 的世界追踪搬到 `ChatBubbleClientListener`，修掉一个竞态：mod 系统消息（如 CustomNPCs 的更新提示）在聊天界面首次打开前就被清掉。
+
+**修复**
+
+- 在聊天底部发送消息不再错误触发通知栏。
+
+**更改**
+
+- 移除已废弃的金色 @提及边框配置项。
+
+----
+
+**Added**
 
 - **Notification bar** — when scrolled up in chat, a bar appears above the input showing "x new messages" on the left and "You were mentioned" on the right (yellow text, click to jump).
 - **@mention strong hint** — getting @mentioned or quoted now triggers a strong hint popup above the hotbar ("You were mentioned" in yellow), configurable via new `mention_strong_hint` option.
 - **@mention via avatar** — left-click any player's avatar (including your own) in chat to insert `@playername` into the input.
 - **Network layer** — quote and @mention metadata are now synced between players via packets (`ChatMetaPacket`, `QuoteSyncPacket`). The mod now requires **both client and server** installation.
 - **World detection refactor** — per-tick world tracking moved to `ChatBubbleClientListener`, fixing a race where mod system messages (e.g. CustomNPCs update notifications) were cleared before the chat screen first opened.
-- **Fixed** — sending a message while at the bottom of chat no longer incorrectly triggers the notification bar.
-- **Removed** — deprecated gold @mention border config options.
+
+**Fixed**
+
+- sending a message while at the bottom of chat no longer incorrectly triggers the notification bar.
+
+**Changed**
+
+- deprecated gold @mention border config options.
 
 ## v0.1.7-beta
+
+**修复**
+
+- 修复首次打开聊天界面时 mod 系统消息被清空的问题。
+
+----
+
+**Fixed**
 
 - Fix mod system messages being wiped from chat on first open.
 
 ## v0.1.4-beta
 
+**修复**
+
+- 修复切换世界时的消息泄漏。
+
+----
+
+**Fixed**
+
 - Fix world switch message leak.
+
