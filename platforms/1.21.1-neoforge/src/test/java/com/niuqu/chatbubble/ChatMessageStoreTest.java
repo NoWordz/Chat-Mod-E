@@ -27,6 +27,7 @@ class ChatMessageStoreTest {
         // stub the gates addMessage hits on every send
         ChatMessageStore.antiSpamEnabledSupplier = () -> true;
         ChatMessageStore.mentionRequireAtSupplier = () -> false;
+        ChatMessageStore.blockedPlayersSupplier = () -> List.<String>of();
     }
 
     // ---- containsWholeName: echo suppression must not misattribute
@@ -691,6 +692,9 @@ class ChatMessageStoreTest {
         var messagesField = ChatMessageStore.class.getDeclaredField("messages");
         messagesField.setAccessible(true);
         ((List<?>) messagesField.get(null)).clear();
+        var backlog = ChatMessageStore.class.getDeclaredField("backlogKeys");
+        backlog.setAccessible(true);
+        ((java.util.Map<?, ?>) backlog.get(null)).clear();
         var metasField = EchoTracker.class.getDeclaredField("pendingMetas");
         metasField.setAccessible(true);
         ((java.util.Map<?, ?>) metasField.get(null)).clear();
@@ -924,5 +928,224 @@ class ChatMessageStoreTest {
         } finally {
             com.niuqu.chatbubble.store.HistoryStore.gameDirSupplier = null;
         }
+    }
+
+    // ---- server backlog merge (2.4.15) ----
+    // addHistoryMessages used to return as soon as the list held anything, which is
+    // why "服务端启用聊天历史分发也不生效" was reported: a player with local history
+    // (or even just a join notice) never saw the backlog. It now merges, minus the
+    // lines the list already holds.
+
+    private static void addLocalRow(String sender, String content, long time) throws Exception {
+        var field = ChatMessageStore.class.getDeclaredField("messages");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        var rows = (List<ChatMessageStore.ChatMessage>) field.get(null);
+        rows.add(new ChatMessageStore.ChatMessage(new java.util.UUID(0, 0),
+            net.minecraft.network.chat.Component.literal(sender),
+            net.minecraft.network.chat.Component.literal(content),
+            time, false, false, null, null, String.valueOf(content.hashCode()), 1,
+            sender, false, null, null));
+    }
+
+    private static com.niuqu.chatbubble.packets.HistoryPayload.HistoryEntry backlog(
+            String sender, String content, long time) {
+        return new com.niuqu.chatbubble.packets.HistoryPayload.HistoryEntry(
+            new java.util.UUID(0, 0), sender, content, time, false, null, null, null);
+    }
+
+    private static List<String> contents() throws Exception {
+        var field = ChatMessageStore.class.getDeclaredField("messages");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        var rows = (List<ChatMessageStore.ChatMessage>) field.get(null);
+        List<String> out = new java.util.ArrayList<>();
+        for (var m : rows) out.add(m.content().getString());
+        return out;
+    }
+
+    @Test void historyMerge_addsBacklogToAnEmptyList() throws Exception {
+        clearMessagesAndMetas();
+        ChatMessageStore.addHistoryMessages(List.of(backlog("Steve", "a", 1L), backlog("Alex", "b", 2L)));
+        assertEquals(List.of("a", "b"), contents());
+    }
+
+    @Test void historyMerge_noLongerDropsBacklogWhenLocalRowsExist() throws Exception {
+        clearMessagesAndMetas();
+        addLocalRow("Steve", "old local line", System.currentTimeMillis() - 60_000);
+        ChatMessageStore.addHistoryMessages(List.of(backlog("Alex", "missed while away", 3L)));
+        assertEquals(List.of("old local line", "missed while away"), contents(),
+            "local history stays on top, the backlog joins it");
+    }
+
+    @Test void historyMerge_skipsLinesTheListAlreadyHolds() throws Exception {
+        clearMessagesAndMetas();
+        addLocalRow("Steve", "hello", System.currentTimeMillis() - 60_000);
+        ChatMessageStore.addHistoryMessages(List.of(
+            backlog("Steve", "hello", 4L),      // the player saw this one already
+            backlog("Steve", "world", 5L)));    // this one is new
+        assertEquals(List.of("hello", "world"), contents());
+    }
+
+    @Test void historyMerge_subtractsCountsNotJustKeys() throws Exception {
+        clearMessagesAndMetas();
+        long now = System.currentTimeMillis();
+        // Two copies locally and three on the server: only the third is something
+        // the player has not seen. A key-set dedup would drop all three.
+        addLocalRow("Steve", "好的", now - 60_000);
+        addLocalRow("Steve", "好的", now - 59_000);
+        ChatMessageStore.addHistoryMessages(List.of(
+            backlog("Steve", "好的", 6L), backlog("Steve", "好的", 7L), backlog("Steve", "好的", 8L)));
+        assertEquals(3, contents().stream().filter("好的"::equals).count(),
+            "two local copies cover two backlog copies, the third is new");
+    }
+
+    @Test void historyMerge_insertsAboveRowsFromThisLaunch() throws Exception {
+        clearMessagesAndMetas();
+        long now = System.currentTimeMillis();
+        addLocalRow("Steve", "restored from disk", now - 60_000);
+        addLocalRow("Steve", "join notice", now);        // produced during this launch
+        ChatMessageStore.addHistoryMessages(List.of(backlog("Alex", "backlog", 9L)));
+        assertEquals(List.of("restored from disk", "backlog", "join notice"), contents(),
+            "the backlog is what happened while away: below history, above the join line");
+    }
+
+    @Test void historyMerge_survivesNullRowAndBlankContent() throws Exception {
+        clearMessagesAndMetas();
+        ChatMessageStore.addHistoryMessages(java.util.Arrays.asList(
+            null, backlog("Steve", "   ", 10L), backlog("Steve", "kept", 11L)));
+        assertEquals(List.of("kept"), contents());
+    }
+
+    @Test void historyMerge_senderColorsDoNotSplitKeys() throws Exception {
+        clearMessagesAndMetas();
+        // The list may hold the decorated name while the backlog carries the raw
+        // one (or the other way round): stripping § codes is what makes them line up.
+        addLocalRow("§6Steve§r", "hello", System.currentTimeMillis() - 60_000);
+        ChatMessageStore.addHistoryMessages(List.of(backlog("Steve", "hello", 12L)));
+        assertEquals(List.of("hello"), contents(), "colored and plain sender names dedup together");
+    }
+    // ---- review round 2: the key dimensions the first pass did not guard ----
+
+    @Test void historyMerge_differentSendersAreNeverDeduped() throws Exception {
+        clearFixture();
+        // Guards the sender half of the key: content alone would drop Alex's line
+        // because Steve already said it.
+        addLocalRow3("Steve", "hello", System.currentTimeMillis() - 60_000, 1, null);
+        ChatMessageStore.addHistoryMessages(List.of(backlog("Alex", "hello", 13L)));
+        assertEquals(List.of("Steve:null:hello", "Alex:null:hello"), sendersAndContents());
+    }
+
+    @Test void historyMerge_groupAndWorldLinesDoNotCollapse() throws Exception {
+        clearFixture();
+        // Same sender, same text, different channel: a group line must not cover a
+        // world line, or the restore drops one of the two for good.
+        addLocalRow3("Steve", "收到", System.currentTimeMillis() - 60_000, 1, "公会");
+        ChatMessageStore.addHistoryMessages(List.of(backlog("Steve", "收到", 14L)));
+        assertEquals(List.of("Steve:公会:收到", "Steve:null:收到"), sendersAndContents());
+    }
+
+    @Test void historyMerge_mergedBubbleCoversItsWholeRepeatCount() throws Exception {
+        clearFixture();
+        // Anti-spam folds three sends into one bubble with duplicateCount=3 while the
+        // server buffer keeps three rows; counting the bubble as one copy would hand
+        // the player two ghost rows they already saw.
+        addLocalRow3("Steve", "好的", System.currentTimeMillis() - 60_000, 3, null);
+        ChatMessageStore.addHistoryMessages(List.of(
+            backlog("Steve", "好的", 15L), backlog("Steve", "好的", 16L),
+            backlog("Steve", "好的", 17L)));
+        assertEquals(1, countOf("好的"), "one merged bubble covers all three backlog rows");
+    }
+
+    // Neo's loader reads the block list through a ModConfigSpec, which throws before
+    // a config is loaded, so the headless test cannot drive loadMessages at all
+    // (pre-existing: BlockList.isBlocked). What Neo can pin is the input the world
+    // switch hands to that loader: only the rows the merge actually inserted.
+    @Test void historyRestore_backlogKeysHoldOnlyInsertedRows() throws Exception {
+        clearFixture();
+        long now = System.currentTimeMillis();
+        addLocalRow3("Steve", "规则说明", now, 1, null);   // a live row the merge must not claim
+        ChatMessageStore.addHistoryMessages(java.util.Arrays.asList(
+            backlog("Alex", "世界", now), null, backlog("Steve", "规则说明", now)));
+
+        var recorded = ChatMessageStore.class.getDeclaredField("backlogKeys");
+        recorded.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        var keys = (java.util.Map<String, Integer>) recorded.get(null);
+        assertEquals(1, keys.size(), "the duplicate and the null row are not recorded");
+        assertEquals(1, countOf("世界"), "the fresh row merged");
+        assertEquals(1, countOf("规则说明"), "the live row was not duplicated by the merge");
+    }
+
+    private static void clearFixture() throws Exception {
+        clearMessagesAndMetas();
+    }
+
+    private static void addLocalRow3(String sender, String content, long time, int dupCount, String group)
+            throws Exception {
+        var field = ChatMessageStore.class.getDeclaredField("messages");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        var rows = (List<ChatMessageStore.ChatMessage>) field.get(null);
+        rows.add(new ChatMessageStore.ChatMessage(new java.util.UUID(0, 0),
+            net.minecraft.network.chat.Component.literal(sender), net.minecraft.network.chat.Component.literal(content),
+            time, false, false, null, null, String.valueOf(content.hashCode()), dupCount,
+            sender, false, null, group));
+    }
+
+    private static long countOf(String content) throws Exception {
+        return contents().stream().filter(content::equals).count();
+    }
+
+    private static List<String> sendersAndContents() throws Exception {
+        var field = ChatMessageStore.class.getDeclaredField("messages");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        var rows = (List<ChatMessageStore.ChatMessage>) field.get(null);
+        List<String> out = new java.util.ArrayList<>();
+        for (var m : rows)
+            out.add(m.rawPlayerName() + ":" + m.group() + ":" + m.content().getString());
+        return out;
+    }
+    @Test void historyRestore_budgetDiesWithTheRow() throws Exception {
+        clearFixture();
+        addLocalRow3("Steve", "hello", System.currentTimeMillis(), 1, null);
+        var keyOf = ChatMessageStore.class.getDeclaredMethod(
+            "mergeKeyOf", ChatMessageStore.ChatMessage.class);
+        var countsOf = ChatMessageStore.class.getDeclaredMethod("mergeCountsOf", List.class);
+        var usable = ChatMessageStore.class.getDeclaredMethod(
+            "usableSkips", java.util.Map.class, java.util.Map.class);
+        keyOf.setAccessible(true); countsOf.setAccessible(true); usable.setAccessible(true);
+
+        var field = ChatMessageStore.class.getDeclaredField("messages");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        var rows = (List<ChatMessageStore.ChatMessage>) field.get(null);
+        String key = (String) keyOf.invoke(null, rows.get(0));
+        var present = (java.util.Map<String, Integer>) countsOf.invoke(null, rows);
+        var recorded = new java.util.HashMap<String, Integer>();
+        recorded.put(key, 1);
+
+        java.util.Map<?, ?> kept = (java.util.Map<?, ?>) usable.invoke(null, recorded, present);
+        assertEquals(1, kept.size(), "a merged row still on screen may hide its saved twin");
+
+        rows.clear();
+        java.util.Map<?, ?> empty = (java.util.Map<?, ?>) usable.invoke(
+            null, recorded, countsOf.invoke(null, rows));
+        assertTrue(empty.isEmpty(),
+            "once the merged row is gone the saved line must come back, not vanish at the next save");
+    }
+    @Test void historyMerge_secondPacketDoesNotVoidTheFirstBudget() throws Exception {
+        clearFixture();
+        long now = System.currentTimeMillis();
+        ChatMessageStore.addHistoryMessages(List.of(backlog("Alex", "世界", now)));
+        var recorded = ChatMessageStore.class.getDeclaredField("backlogKeys");
+        recorded.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        var keys = (java.util.Map<String, Integer>) recorded.get(null);
+        assertEquals(1, keys.size(), "the first backlog is on screen and budgeted");
+        // A second packet that duplicates the first must not erase what is on screen.
+        ChatMessageStore.addHistoryMessages(List.of(backlog("Alex", "世界", now + 1)));
+        assertEquals(1, keys.size(), "a fully deduped second packet leaves the budget alone");
     }
 }

@@ -863,17 +863,23 @@ public class ChatMessageStore {
                 // notices) must stay newest — load saved history underneath them
                 // instead of appending it after
                 List<ChatMessage> early = new ArrayList<>(messages);
+                // The backlog can land before the world key is known, so its rows are
+                // the "early" ones here: hand their keys to the loader and it will not
+                // restore the same lines a second time underneath them.
+                Map<String, Integer> skipKeys = usableSkips(backlogKeys, mergeCountsOf(early));
+                backlogKeys.clear();
                 messages.clear();
-                loadMessages(currentWorldKey);
+                loadMessages(currentWorldKey, skipKeys);
                 messages.addAll(early);
             }
             return;
         }
         messages.clear();
+        backlogKeys.clear();
         unreadCount = 0;
         hasUnreadMentionFlag = false;
         if (ChatBubbleClientSetup.config().chatHistoryEnabled() && isWorldSpecific(currentWorldKey))
-            loadMessages(currentWorldKey);
+            loadMessages(currentWorldKey, Collections.emptyMap());
     }
 
     private static boolean isWorldSpecific(String key) {
@@ -1040,6 +1046,7 @@ public class ChatMessageStore {
      */
     public static void clearCurrentWorldHistory() {
         messages.clear();
+        backlogKeys.clear();
         unreadCount = 0;
         hasUnreadMentionFlag = false;
         unreadWhisperPartners.clear();
@@ -1110,7 +1117,17 @@ public class ChatMessageStore {
         saveMessages(currentWorldKey);
     }
 
-    private static void loadMessages(String worldKey) {
+    /**
+     * Restore saved history for a world. `skipCounts` carries the lines the caller
+     * already has staged (the server backlog can arrive before the world key is
+     * known, and those rows must not be restored a second time under them); pass an
+     * empty map when nothing is kept.
+     */
+    private static void loadMessages(String worldKey, Map<String, Integer> skipCounts) {
+        // Own the map: a caller may hand over an immutable one, and takeFresh
+        // consumes it as it goes.
+        skipCounts = skipCounts.isEmpty() ? Collections.<String, Integer>emptyMap()
+            : new HashMap<>(skipCounts);
         File f = getHistoryFile(worldKey);
         if (!f.exists()) {
             File legacy = getLegacyHistoryFile(worldKey);
@@ -1136,6 +1153,7 @@ public class ChatMessageStore {
             List<ChatMessage> legacy = loadLegacyFile(f);
             for (ChatMessage m : legacy) {
                 if (BlockList.isBlocked(m)) continue;
+                if (!skipCounts.isEmpty() && !takeFresh(skipCounts, mergeKeyOf(m))) continue;
                 messages.add(m);
                 if (!m.isSystem() && !m.senderUUID().equals(new UUID(0, 0)))
                     rememberPlayer(m.senderUUID(), m.rawPlayerName(), m.senderName().getString());
@@ -1149,6 +1167,7 @@ public class ChatMessageStore {
                     try {
                         ChatMessage m = fromLine(line);
                         if (m == null || BlockList.isBlocked(m)) continue;
+                        if (!skipCounts.isEmpty() && !takeFresh(skipCounts, mergeKeyOf(m))) continue;
                         messages.add(m);
                         if (!m.isSystem() && !m.senderUUID().equals(new UUID(0, 0)))
                             rememberPlayer(m.senderUUID(), m.rawPlayerName(), m.senderName().getString());
@@ -1164,31 +1183,137 @@ public class ChatMessageStore {
     }
 
 
+    // Wall clock at class init: splits rows restored from disk (older than this
+    // launch) from rows produced during this launch (join notice, MOTD, live chat).
+    private static final long SESSION_START_MS = System.currentTimeMillis();
+    // Compiled once: the merge keys every restored line of a 10000-row file.
+    private static final java.util.regex.Pattern MERGE_NAME_COLOR =
+        java.util.regex.Pattern.compile("§.");
+
+    /**
+     * Identity of one chat line for merge purposes: sender + content + group. Time
+     * is deliberately excluded - the server backlog is stamped with the server's
+     * clock while our own list uses ours, so a time-based key would either miss a
+     * real duplicate or swallow a distinct message. The whole text is compared
+     * rather than a hash: a 32-bit collision would silently delete a line.
+     * isSystem and whisper stay out of it on purpose: two lines a player reads
+     * as the same words are the same words to them, whoever carried them.
+     */
+    private static String mergeKey(String senderName, String content, String group) {
+        String name = senderName == null ? ""
+            : MERGE_NAME_COLOR.matcher(senderName).replaceAll("").trim().toLowerCase(Locale.ROOT);
+        return name + "\0" + (content == null ? "" : content)
+            + "\0" + (group == null ? "" : group);
+    }
+
+    private static String mergeKeyOf(ChatMessage m) {
+        String name = m.rawPlayerName() != null && !m.rawPlayerName().isEmpty()
+            ? m.rawPlayerName()
+            : (m.senderName() != null ? m.senderName().getString() : null);
+        return mergeKey(name, m.content().getString(), m.group());
+    }
+
+    /**
+     * How many copies of each line the given rows already hold (multiset). An
+     * anti-spam merged bubble stands for duplicateCount sends, so it covers that
+     * many backlog rows; counting it as one would hand the player back copies of
+     * messages they already saw.
+     */
+    private static Map<String, Integer> mergeCountsOf(List<ChatMessage> rows) {
+        Map<String, Integer> counts = new HashMap<>();
+        for (ChatMessage m : rows)
+            counts.merge(mergeKeyOf(m), Math.max(1, m.duplicateCount()), Integer::sum);
+        return counts;
+    }
+
+    private static Map<String, Integer> mergeCounts() {
+        return mergeCountsOf(messages);
+    }
+
+    /**
+     * Keys of the rows the server backlog inserted while the world key was still
+     * unknown. Only these may suppress a restored copy: using "everything in the
+     * list" instead would let the MOTD or a join notice swallow a saved line, and
+     * the next save would then write that line out of the history file for good.
+     */
+    private static final Map<String, Integer> backlogKeys = new HashMap<>();
+
+    /**
+     * Suppression budget still backed by a live row. A recorded backlog key may only
+     * hide a saved twin while the merged copy is actually on screen: once that row is
+     * gone (a blocked sender purged it, the list cap truncated it) the saved line has
+     * to come back instead of vanishing from the file at the next save.
+     */
+    private static Map<String, Integer> usableSkips(Map<String, Integer> recorded,
+                                                    Map<String, Integer> present) {
+        Map<String, Integer> out = new HashMap<>();
+        for (Map.Entry<String, Integer> e : recorded.entrySet()) {
+            Integer have = present.get(e.getKey());
+            if (have == null || have <= 0) continue;
+            out.put(e.getKey(), Math.min(e.getValue(), have));
+        }
+        return out;
+    }
+
+    /** Consume one already-held copy of the key; false means the other side covers it. */
+    private static boolean takeFresh(Map<String, Integer> counts, String key) {
+        Integer left = counts.get(key);
+        if (left != null && left > 0) {
+            counts.put(key, left - 1);
+            return false;
+        }
+        return true;
+    }
+
     public static void addHistoryMessages(List<com.niuqu.chatbubble.network.HistoryPayload.HistoryEntry> entries) {
-        if (!messages.isEmpty() || entries.isEmpty()) return;
+        if (entries == null || entries.isEmpty()) return;
+        // Merge, don't drop. Before 2.4.15 this returned as soon as the list held
+        // anything, which silently killed server history for every player who had
+        // local history or even just a join notice - the "启用下发也不生效" report.
+        // The duplicates that guard was invented to prevent are now removed per
+        // line: a backlog row only survives when the list does not already hold a
+        // copy of it, counted, so a player who said the same thing twice locally and
+        // twice on the server is not handed either copy again.
+        Map<String, Integer> seen = mergeCounts();
+        List<ChatMessage> fresh = new ArrayList<>();
         for (var e : entries) {
-            if (e.content().isBlank()) continue;
-            if (BlockList.isPlayerBlocked(e.senderName(), Text.literal(e.senderName()),
+            if (e == null) continue;                                  // hostile/raced row
+            String sender = e.senderName() != null ? e.senderName() : "";
+            String content = e.content() != null ? e.content() : "";
+            if (content.isBlank()) continue;
+            if (BlockList.isPlayerBlocked(sender, Text.literal(sender),
                 ChatBubbleClientSetup.config().blockedPlayers())) continue;
-            messages.add(new ChatMessage(
-                e.senderUUID(),
-                Text.literal(e.senderName()),
-                Text.literal(e.content()),
+            String key = mergeKey(sender, content, e.group());
+            if (!takeFresh(seen, key)) continue;
+            backlogKeys.merge(key, 1, Integer::sum);
+            fresh.add(new ChatMessage(
+                e.senderUUID() != null ? e.senderUUID() : new UUID(0, 0),
+                Text.literal(sender),
+                Text.literal(content),
                 e.time(),
                 false,
                 e.isSystem(),
                 e.replyContent(),
                 e.replySender(),
-                String.valueOf(e.content().hashCode()),
+                String.valueOf(content.hashCode()),
                 1,
-                e.senderName(),
+                sender,
                 false,
                 null,
                 e.group()
             ));
-            if (!e.isSystem() && !e.senderUUID().equals(new UUID(0, 0)))
-                rememberPlayer(e.senderUUID(), e.senderName(), e.senderName());
+            if (!e.isSystem() && e.senderUUID() != null && !e.senderUUID().equals(new UUID(0, 0)))
+                rememberPlayer(e.senderUUID(), sender, sender);
         }
+        if (fresh.isEmpty()) return;
+        // Land the backlog above everything this launch produced and below the rows
+        // restored from disk: it is "what happened while I was away", so it belongs
+        // with the history, not after the join notice. Uses our clock only, so a
+        // skewed server clock cannot reorder the local list.
+        int at = 0;
+        while (at < messages.size() && messages.get(at).time() < SESSION_START_MS) at++;
+        messages.addAll(at, fresh);
+        while (messages.size() > MAX) messages.remove(0);
     }
 
     public static void applyChatMeta(UUID senderUUID, String senderName, String messageHash,
