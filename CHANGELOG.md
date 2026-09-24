@@ -1,5 +1,69 @@
 # Changelog
 
+## v2.4.15
+
+**修复：聊天历史下发不再能踢掉进服玩家（三端）**
+
+- `HistoryPacket.encode` / `HistoryPayload` 编码遇到 null 条目改为跳过该行，计数按实际写入的行数写，不再出现「计数与内容不符」的半截包
+- 条目内 `senderUUID` / `senderName` / `content` 为 null 时落回 `UUID(0,0)` 与空串（离线玩家本来就是这一形状）
+- 服务端进服下发套异常兜底：失败只记 `[e33chat] History sync to <玩家> failed`，不再让编解码异常从 `PlayerLoggedInEvent`（Fabric 为 JOIN 事件）里逃出去炸掉「把玩家放进世界」；服务端配置同步、群列表同步各自独立兜底，互不牵连，连 `history_enabled` 的读取都在保护范围内（只捕 `RuntimeException`，`VirtualMachineError` 仍照常上抛）
+- 编码丢行时打一条 `History packet: dropped N unreadable row(s) of M`，「历史变短」不再无痕迹
+- `historyBuffer` 全部读写（追加 / 截断 / 快照 / 停服清理）收进 `HISTORY_LOCK`，快照不再可能读到 `ArrayDeque.removeFirst()` 写回的 null 槽位
+
+**更改：服务端历史与本地历史合并去重（三端）**
+
+- `ChatMessageStore.addHistoryMessages` 不再在本地列表非空时整包丢弃服务端 backlog，改为按「发送者（剥 § 色码小写）+ 整条内容 + 群名」做多集减法后合并（内容比整串不比哈希，避免撞车误删；群名进键，群聊行不会吞掉公聊行）
+- 合并位置落在「本地恢复的历史」与「本次启动收到的消息（进服提示、MOTD、实时聊天）」之间，排序只用客户端自己的时钟，服务端时钟偏差不会打乱本地列表
+- 反垃圾合并气泡按重复次数计入多集（1 条 `duplicateCount=3` 的气泡覆盖 3 行 backlog），不再吐回玩家已看过的行
+- 恢复磁盘历史时只压制「本次合并真正插入的那几行」的键：进服提示、MOTD 不参与压制，否则会把磁盘上的一行顶掉、下次存盘就永久写没
+- `loadMessages` 收到的跳过表先复制再消费，调用方传不可变 Map 也不会炸
+- 压制预算只认「此刻屏幕上还在的合并行」：行被屏蔽或被上限截掉后，磁盘那份必须回来，而不是被下次存盘写没
+- NeoForge 端为屏蔽名单新增 `blockedPlayersSupplier` 测试接缝（与 `antiSpamEnabledSupplier` 同一惯例，ModConfigSpec headless 读配置即抛）
+- 色码剥离的正则提到常量（10000 行历史文件恢复时不再每行编译一次），无压制项时直接跳过键计算
+
+**说明**
+
+- 服务端 `history_enabled` 默认值不变（仍为 false），要下发必须在 `serverconfig/e33chat-server.toml` 或 `/e33chat gui` 打开
+- backlog 是内存缓冲、不跨重启，且只收录 `ServerChatEvent` 与群聊发言，服务端代发/插件广播不入表
+
+**开发**
+
+- 三端各新增 15 条用例（`PacketCodecTest` 空条目 / 空字段各 1 条，`ChatMessageStoreTest` 合并 / 恢复 13 条），Forge / NeoForge / Fabric 475 / 476 / 445 全绿
+- 变异探针七轮（`cleanTest` 强制真跑，逐轮核对还原）：装回 2.4.0 形状的 encode → 2 条编解码用例红；关掉多集去重 → 3 条红；插入位置改成追加 → 4 条红；键退化成「只比内容」→ 正好 2 条红；忽略 `duplicateCount` → 正好 1 条红；恢复压制放宽到「列表全部行」→ 正好 1 条红；压制预算不做现存校验 / 预算不被消费 / 合并退回整包丢弃 → 各自对应用例红。七轮互不串味，全部还原后复绿
+- 顺带：进服引用等待表 `pendingQuotes` 改 `ConcurrentHashMap`、历史截断改 `pollFirst`（`size` 被写坏时不再从聊天事件里抛 `NoSuchElementException`）
+
+----
+
+**Fixed: chat-history delivery can no longer kick a joining player (all platforms)**
+
+- The history encoder skips rows it cannot write and derives the count from the rows actually written, so a damaged row can no longer produce a truncated packet
+- Null `senderUUID` / `senderName` / `content` fall back to `UUID(0,0)` and `""`, the shape offline senders already use
+- The login-time delivery is wrapped so a codec failure is logged instead of escaping `PlayerLoggedInEvent`, which vanilla turns into an `Invalid player data` kick; the server-config sync got its own guard, so neither can cost the other, and only `RuntimeException` is caught - a `VirtualMachineError` still propagates
+- Rows the encoder drops are reported (`History packet: dropped N unreadable row(s) of M`), so a short history leaves a trace
+- Every read and write of the history buffer (append, trim, snapshot, stop-time clear) now runs under one lock, so a snapshot can no longer observe the null slots `ArrayDeque.removeFirst()` leaves behind
+
+**Changed: server backlog merges with local history (all platforms)**
+
+- `addHistoryMessages` no longer drops the backlog when the client has any local row; it subtracts, per sender and per line, what the player already has and merges the rest
+- The merged rows land between restored local history and everything this launch produced, ordered by the client clock only, so a skewed server clock cannot reorder the list
+- Anti-spam bubbles count for their whole repeat run, so one bubble standing for three sends covers three backlog rows instead of handing two of them back
+- Only the rows a merge actually inserted can suppress their saved twin when local history is restored; join notices and the MOTD cannot evict a line from disk, which the next save would then drop for good
+- The skip list handed to the loader is copied before it is consumed, so an immutable map cannot break a restore halfway
+- A saved copy may only be hidden while its merged twin is actually on screen: once that row is purged by a block or truncated away, the saved line returns instead of being written out of the file at the next save
+- NeoForge gained a `blockedPlayersSupplier` test seam, matching the existing `antiSpamEnabledSupplier` convention
+- The colour-code pattern is compiled once instead of per line, and no key is built at all when nothing is being suppressed, so a 10000-row history file no longer pays for the merge twice
+
+**Notes**
+
+- `history_enabled` still defaults to false; a server must enable it in `serverconfig/e33chat-server.toml` or `/e33chat gui`
+- The backlog is memory-only, cleared on restart, and collects player chat and group messages only
+
+**Development**
+
+- Fifteen new cases per platform (null row and null field in `PacketCodecTest`, thirteen merge and restore cases in `ChatMessageStoreTest`); 475 / 476 / 445 tests green on Forge / NeoForge / Fabric
+- Seven mutation probes, each forced to re-run and followed by a byte-exact restore check, confirm the guards bite individually: restoring the 2.4.0 encoder reddens 2 codec cases, disabling the multiset dedup reddens 3, appending instead of inserting reddens 4, keying on content alone reddens exactly the 2 sender/group cases, ignoring `duplicateCount` reddens exactly 1, widening the restore suppression reddens exactly 1, dropping the on-screen check reddens exactly 1, never consuming the budget reddens exactly 1, and falling back to drop-everything reddens 6
+- Also: the pending-quote map became a `ConcurrentHashMap` and the history trim uses `pollFirst`, so a corrupted size can no longer throw out of a chat event
+
 ## v2.4.14
 
 **修复：系统消息被 EasyBot 冒号形态误认成玩家气泡（三端）**

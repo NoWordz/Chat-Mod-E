@@ -1,5 +1,35 @@
 # Release Notes
 
+## v2.4.15
+
+**修复**
+
+- 服务端聊天历史下发不再能把进服玩家踢下线：历史包遇到损坏条目改为跳过该行，下发或配置同步失败只在服务端记日志，进服流程不受影响（Forge / NeoForge / Fabric）；历史缓冲改加锁访问，混服与异步聊天桥不再能把半截快照交给编码器。
+
+**更改**
+
+- 玩家进服收到的最近 50 条不再因为本地已有记录而被整包丢弃：现在按发送者与内容逐条比对后合并进本地历史（同一人重复说的话按次数抵消），位置落在本地历史之后、本次进服提示之前，不会把已经在屏幕上的消息顶掉或重复显示。
+
+**说明**
+
+- `history_enabled` 仍默认关闭，服务端需在 `serverconfig/e33chat-server.toml` 或 `/e33chat gui` 打开才会下发。
+- 下发内容来自服务端内存缓冲，不跨重启，且只收录真实玩家发言（服务端代发的消息、插件广播不进历史）。
+
+----
+
+**Fixed**
+
+- Joining players can no longer be kicked ("Invalid player data") by the server-side chat-history delivery: a damaged row is now skipped instead of aborting the packet, a failed delivery is logged on the server and never touches the login flow, and the history buffer is lock-guarded so hybrid servers and async chat bridges can no longer hand the encoder a half-built snapshot (Forge / NeoForge / Fabric).
+
+**Changed**
+
+- The 50-message backlog sent on join is merged instead of dropped: lines the player already has are matched by sender and text, repeats cancel out by count, and the rest land between the restored local history and this session's join notice, so nothing already on screen is displaced or shown twice.
+
+**Notes**
+
+- `history_enabled` still defaults to false, so a server has to turn it on in `serverconfig/e33chat-server.toml` or via `/e33chat gui`.
+- The backlog lives in memory only: it does not survive a restart and it contains player chat alone, so plugin and server-issued messages are not part of it.
+
 ## v2.4.14
 
 **修复**
