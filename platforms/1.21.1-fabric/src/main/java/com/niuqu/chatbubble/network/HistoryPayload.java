@@ -12,6 +12,9 @@ import java.util.UUID;
 public record HistoryPayload(List<HistoryPayload.HistoryEntry> entries)
         implements CustomPayload {
 
+    /** Cracked/offline senders already arrive as UUID(0,0); reuse it for a missing one. */
+    private static final UUID NULL_UUID = new UUID(0, 0);
+
     public static final CustomPayload.Id<HistoryPayload> ID =
         new CustomPayload.Id<>(Identifier.of("e33chat", "chat_history"));
 
@@ -27,16 +30,29 @@ public record HistoryPayload(List<HistoryPayload.HistoryEntry> entries)
     ) {}
 
     public static final PacketCodec<PacketByteBuf, HistoryPayload> CODEC = PacketCodec.of(
-        (value, buf) -> buf.writeCollection(value.entries, (b, e) -> {
-            b.writeString(e.senderUUID().toString());
-            b.writeString(e.senderName());
-            b.writeString(e.content());
-            b.writeLong(e.time());
-            b.writeBoolean(e.isSystem());
-            b.writeString(e.replyContent() != null ? e.replyContent() : "");
-            b.writeString(e.replySender() != null ? e.replySender() : "");
-            b.writeString(e.group() != null ? e.group() : "");
-        }),
+        // Robustness, learned from a field incident: this packet is built from a
+        // snapshot of the server's history buffer and encoded while the join-event
+        // chain is still running, so one null row used to throw an NPE that cost the
+        // joining player their login ("Invalid player data"). Rows that cannot be
+        // encoded are skipped; writeCollection's count is the filtered list's size,
+        // so the header can never over-count what follows.
+        (value, buf) -> {
+            List<HistoryEntry> rows = new ArrayList<>();
+            if (value.entries != null) {
+                for (int i = 0; i < value.entries.size(); i++) {
+                    HistoryEntry e = value.entries.get(i);
+                    if (e != null) rows.add(e);
+                }
+            }
+            if (value.entries != null && rows.size() < value.entries.size()) {
+                // One line of evidence for "the history arrived short": dropping a row
+                // is deliberate, but it must not be invisible.
+                com.mojang.logging.LogUtils.getLogger().warn("[e33chat] History packet: dropped "
+                    + (value.entries.size() - rows.size()) + " null row(s) of "
+                    + value.entries.size());
+            }
+            buf.writeCollection(rows, HistoryPayload::writeEntry);
+        },
         buf -> {
             // Entry bound aligned with Forge/Neo (200): the count comes off the
             // wire, and even 1.21.1's readList still allows a 65536-entry
@@ -57,6 +73,17 @@ public record HistoryPayload(List<HistoryPayload.HistoryEntry> entries)
             return new HistoryPayload(entries);
         }
     );
+
+    private static void writeEntry(PacketByteBuf buf, HistoryEntry e) {
+        buf.writeString((e.senderUUID() != null ? e.senderUUID() : NULL_UUID).toString());
+        buf.writeString(e.senderName() != null ? e.senderName() : "");
+        buf.writeString(e.content() != null ? e.content() : "");
+        buf.writeLong(e.time());
+        buf.writeBoolean(e.isSystem());
+        buf.writeString(e.replyContent() != null ? e.replyContent() : "");
+        buf.writeString(e.replySender() != null ? e.replySender() : "");
+        buf.writeString(e.group() != null ? e.group() : "");
+    }
 
     private static String nullOrEmpty(String s) { return s == null || s.isEmpty() ? null : s; }
 

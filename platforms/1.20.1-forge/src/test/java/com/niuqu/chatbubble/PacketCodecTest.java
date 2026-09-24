@@ -49,6 +49,13 @@ class PacketCodecTest {
         assertArrayEquals(original, after, "encode(decode(encode(p))) must equal encode(p)");
     }
 
+    /** Encode into a throwaway buffer and hand back the bytes for comparison. */
+    private static byte[] bytes(java.util.function.Consumer<FriendlyByteBuf> writer) {
+        FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+        writer.accept(buf);
+        return Arrays.copyOf(buf.array(), buf.writerIndex());
+    }
+
     @Test void quoteSyncStable() {
         assertStable(new QuoteSyncPacket("Steve", "hello [quote]", "hash123"),
             (p, buf) -> ((QuoteSyncPacket) p).encode(buf), b -> QuoteSyncPacket.decode(b));
@@ -76,6 +83,37 @@ class PacketCodecTest {
     @Test void historyEmptyStable() {
         assertStable(new HistoryPacket(List.of()),
             (p, buf) -> HistoryPacket.encode((HistoryPacket) p, buf), b -> HistoryPacket.decode(b));
+    }
+
+    // The 2.4.0 incident: a null row in the login snapshot made encode throw an
+    // NPE inside PlayerLoggedInEvent, and vanilla turned that into
+    // "Couldn't place player in world" + a kick ("Invalid player data").
+    // Encode must degrade to "skip that row", never to "break the login".
+    // Byte-level assertions (no getters on this packet, per the style above).
+    @Test void historySkipsNullEntry() {
+        HistoryPacket.HistoryEntry good = new HistoryPacket.HistoryEntry(
+            new UUID(3, 3), "Steve", "kept", 1700000002000L, false, null, null, "公会");
+        assertArrayEquals(
+            bytes(p -> HistoryPacket.encode(new HistoryPacket(List.of(good)), p)),
+            bytes(p -> HistoryPacket.encode(new HistoryPacket(Arrays.asList(null, good, null)), p)),
+            "null rows are dropped and the survivor keeps its bytes");
+        assertArrayEquals(
+            bytes(p -> HistoryPacket.encode(new HistoryPacket(List.of()), p)),
+            bytes(p -> HistoryPacket.encode(new HistoryPacket(Arrays.asList(null, null)), p)),
+            "an all-null packet is a legal empty list, not a half-written one");
+    }
+
+    @Test void historyNullFieldsBecomeEmpty() {
+        HistoryPacket.HistoryEntry bare = new HistoryPacket.HistoryEntry(
+            null, null, null, 1700000003000L, false, null, null, null);
+        HistoryPacket.HistoryEntry emptyish = new HistoryPacket.HistoryEntry(
+            new UUID(0, 0), "", "", 1700000003000L, false, null, null, null);
+        assertDoesNotThrow(() ->
+            HistoryPacket.encode(new HistoryPacket(List.of(bare)), new FriendlyByteBuf(Unpooled.buffer())));
+        assertArrayEquals(
+            bytes(p -> HistoryPacket.encode(new HistoryPacket(List.of(emptyish)), p)),
+            bytes(p -> HistoryPacket.encode(new HistoryPacket(List.of(bare)), p)),
+            "missing sender/content fall back to UUID(0,0) and \"\" (the offline-player shape)");
     }
 
     @Test void configSyncStable() {

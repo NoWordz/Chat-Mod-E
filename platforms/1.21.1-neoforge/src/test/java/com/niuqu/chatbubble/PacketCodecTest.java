@@ -72,6 +72,38 @@ class PacketCodecTest {
             HistoryPayload.STREAM_CODEC);
     }
 
+    // The 2.4.0 incident: a null row in the login snapshot made encode throw an
+    // NPE inside PlayerLoggedInEvent, and vanilla turned that into
+    // "Couldn't place player in world" + a kick ("Invalid player data").
+    // Encode must degrade to "skip that row", never to "break the login".
+    @Test void historySkipsNullEntry() {
+        HistoryPayload.HistoryEntry good = new HistoryPayload.HistoryEntry(
+            new UUID(3, 3), "Steve", "kept", 1700000002000L, false, null, null, "Guild");
+        assertArrayEquals(historyBytes(new HistoryPayload(List.of(good))),
+            historyBytes(new HistoryPayload(Arrays.asList(null, good, null))),
+            "null rows are dropped and the survivor keeps its bytes");
+        assertArrayEquals(historyBytes(new HistoryPayload(List.of())),
+            historyBytes(new HistoryPayload(Arrays.asList(null, null))),
+            "an all-null packet is a legal empty list, not a half-written one");
+    }
+
+    @Test void historyNullFieldsBecomeEmpty() {
+        HistoryPayload.HistoryEntry bare = new HistoryPayload.HistoryEntry(
+            null, null, null, 1700000003000L, false, null, null, null);
+        HistoryPayload.HistoryEntry emptyish = new HistoryPayload.HistoryEntry(
+            new UUID(0, 0), "", "", 1700000003000L, false, null, null, null);
+        assertDoesNotThrow(() -> { historyBytes(new HistoryPayload(List.of(bare))); });
+        assertArrayEquals(historyBytes(new HistoryPayload(List.of(emptyish))),
+            historyBytes(new HistoryPayload(List.of(bare))),
+            "missing sender/content fall back to UUID(0,0) and \"\" (the offline-player shape)");
+    }
+
+    private static byte[] historyBytes(HistoryPayload payload) {
+        FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+        HistoryPayload.STREAM_CODEC.encode(buf, payload);
+        return Arrays.copyOf(buf.array(), buf.writerIndex());
+    }
+
     @Test void configSyncStable() {
         assertStable(new ConfigSyncPayload(true),
             ConfigSyncPayload.STREAM_CODEC);

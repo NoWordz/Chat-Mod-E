@@ -24,7 +24,15 @@ public class ChatServerListener {
     private static final Pattern MENTION_PATTERN = Pattern.compile("@([\\p{L}\\p{N}_]+)");
     private static final int HISTORY_MAX = 50;
 
-    private static final Map<UUID, QuotePending> pendingQuotes = new HashMap<>();
+    // ConcurrentHashMap: onServerChat both reads and writes this map, and the
+    // history-buffer lock below exists precisely because that handler is not
+    // always on the main thread. A plain HashMap corrupts on concurrent resize.
+    private static final Map<UUID, QuotePending> pendingQuotes = new java.util.concurrent.ConcurrentHashMap<>();
+    // Every touch of historyBuffer goes through this lock. ArrayDeque is not
+    // thread safe and its trim (removeFirst) nulls the vacated slot for GC, so an
+    // unsynchronized `new ArrayList<>(historyBuffer)` snapshot could hand the
+    // encoder a null element - see the 2.4.0 "Invalid player data" kick incident.
+    private static final Object HISTORY_LOCK = new Object();
     private static final Deque<HistoryPayload.HistoryEntry> historyBuffer = new ArrayDeque<>();
 
     // package-private: GroupManager.say consumes quotes for group messages
@@ -101,13 +109,31 @@ public class ChatServerListener {
     public void onPlayerLogin(PlayerEvent.PlayerLoggedInEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
 
-        // Always sync server-side settings so the client head menu matches the server
-        sendServerConfigTripleTo(player);
+        // Both hand-offs below run inside PlayerLoggedInEvent. An exception that
+        // escapes here does not just lose the feature - it aborts "place player in
+        // world" and vanilla kicks the player with "Invalid player data", which is
+        // exactly how the 2.4.0 history NPE presented. Each is best effort and
+        // wrapped on its own, so a failed config sync cannot cost the backlog or
+        // the login. Only RuntimeException is caught: a VirtualMachineError means
+        // the JVM is going down and must not be swallowed here.
+        try {
+            // Always sync server-side settings so the client head menu matches the server
+            sendServerConfigTripleTo(player);
+        } catch (RuntimeException e) {
+            com.mojang.logging.LogUtils.getLogger().warn(
+                "[e33chat] Server config sync to " + player.getName().getString() + " failed", e);
+        }
 
-        if (!ChatServerConfig.HISTORY_ENABLED.get()) return;
-        if (historyBuffer.isEmpty()) return;
-        PacketDistributor.sendToPlayer(player,
-            new HistoryPayload(new ArrayList<>(historyBuffer)));
+        try {
+            if (!ChatServerConfig.HISTORY_ENABLED.get()) return;
+            List<HistoryPayload.HistoryEntry> snapshot = snapshotHistory();
+            if (!snapshot.isEmpty()) {
+                PacketDistributor.sendToPlayer(player, new HistoryPayload(snapshot));
+            }
+        } catch (RuntimeException e) {
+            com.mojang.logging.LogUtils.getLogger().warn(
+                "[e33chat] History sync to " + player.getName().getString() + " failed", e);
+        }
     }
 
     private static volatile com.niuqu.chatbubble.server.DiskMediaStore mediaStore;
@@ -144,7 +170,9 @@ public class ChatServerListener {
         // attach to messages in the next world and the backlog would be
         // delivered as "history" there.
         pendingQuotes.clear();
-        historyBuffer.clear();
+        synchronized (HISTORY_LOCK) {
+            historyBuffer.clear();
+        }
     }
 
 
@@ -198,9 +226,24 @@ public class ChatServerListener {
     }
 
     private static void addToHistory(HistoryPayload.HistoryEntry entry) {
-        historyBuffer.addLast(entry);
-        while (historyBuffer.size() > HISTORY_MAX)
-            historyBuffer.removeFirst();
+        // ArrayDeque.addLast(null) throws; dropping a null entry here keeps the
+        // failure out of the chat event that produced it.
+        if (entry == null) return;
+        synchronized (HISTORY_LOCK) {
+            historyBuffer.addLast(entry);
+            // pollFirst, not removeFirst: a deque whose size drifted (the exact
+            // failure this lock is meant to survive) must not throw
+            // NoSuchElementException out of the chat event that fed it.
+            while (historyBuffer.size() > HISTORY_MAX && historyBuffer.pollFirst() != null)
+                ;
+        }
+    }
+
+    /** Locked copy-on-write snapshot; the encoder never sees the live deque. */
+    private static List<HistoryPayload.HistoryEntry> snapshotHistory() {
+        synchronized (HISTORY_LOCK) {
+            return new ArrayList<>(historyBuffer);
+        }
     }
 
     private static List<String> extractMentions(String text, int playerCount) {
