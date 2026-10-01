@@ -1,5 +1,25 @@
 # Release Notes
 
+## v2.4.16
+
+**修复**
+
+- 客户端单独安装在没装 e33chat 的服务器上不再出现「进服后 WASD 无法移动」：进服握手包改为只在服务器真正具备 e33chat 通道时发送。此前 NeoForge 会对「对端未协商的通道」直接抛异常，而这个发送恰好发生在原版登录流程内部，把「把玩家加进世界、创建移动输入」之后的登录初始化整个跳过——世界照常渲染，但移动输入对象从未创建，整个会话无法移动且无任何报错；服务端同装时通道协商成功，因此只在纯客户端安装时复现。（NeoForge 1.21.1）
+
+**说明**
+
+- 在没有 e33chat 的服务器上，聊天面板与本地功能照常可用；群组页签不再出现（它本来就需要服务端配合）。日志会记一条 `Server has no e33chat channel; skipping client hello`。
+
+----
+
+**Fixed**
+
+- A client-only install on a server without e33chat no longer freezes WASD after joining: the join handshake is now only sent when the server actually has the e33chat channel. NeoForge hard-throws on a payload the peer never negotiated, and this send happened inside the vanilla login flow, skipping every initialization step after it — the world kept rendering but the movement-input object was never created, so the session could not move and logged nothing; servers with the mod negotiated the channel and never reproduced. (NeoForge 1.21.1)
+
+**Notes**
+
+- On servers without e33chat the panel and local features keep working; the group tab no longer appears (it always required the server side anyway). The log records `Server has no e33chat channel; skipping client hello`.
+
 ## v2.4.15
 
 **修复**

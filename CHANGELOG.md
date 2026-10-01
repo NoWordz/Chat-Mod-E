@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.4.16
+
+**修复：客户端单独安装在无 e33chat 服务器上 WASD 冻结（NeoForge 1.21.1）**
+
+- 进服握手 `ClientHelloPayload` 改为在 `hasChannel` 确认服务器协商过 e33chat 通道后才发送；无通道时跳过并记一条 `[e33chat] Server has no e33chat channel; skipping client hello`，群组页签自然不出现（它本来就依赖服务端）
+- 根因：NeoForge 对「对端未协商通道」的 C2S 发包在 `NetworkRegistry.checkPacket` 直接抛 `UnsupportedOperationException`，而 optional 注册在无 mod 服务器上协商结果为空；这个发送发生在 `ClientPlayerNetworkEvent.LoggingIn`，该事件又在原版 `ClientPacketListener.handleLogin` 内部触发——异常把「把玩家加进世界（`level.addEntity`）」与「创建移动输入（`player.input = new KeyboardInput`）」两步跳过：玩家实体不被 tick、移动输入不存在，世界照常渲染、游戏不崩（任务层捕获只记一行 `Error executing task on Main`），表现即「进服后 WASD 无反应、无报错」；服务端同装时通道协商成功，因此只在纯客户端安装时复现
+- 发送同时套 `RuntimeException` 兜底（对齐 2.4.15 服务端登录交接的包裹哲学）：登录流程内的发送失败只降级为一条警告，不再能代价后半段登录；`VirtualMachineError` 仍照常上抛
+
+----
+
+**Fixed: client-only installs no longer freeze WASD on servers without e33chat (NeoForge 1.21.1)**
+
+- The join handshake (`ClientHelloPayload`) is now only sent after `hasChannel` confirms the server negotiated the e33chat channel; otherwise it is skipped with a `[e33chat] Server has no e33chat channel; skipping client hello` log line and the group tab simply never appears (it always required the server side)
+- Root cause: NeoForge hard-throws in `NetworkRegistry.checkPacket` on a C2S payload the peer never negotiated, and optional registrations negotiate to nothing on a server without the mod; the send ran inside `ClientPlayerNetworkEvent.LoggingIn`, which vanilla fires in the middle of `ClientPacketListener.handleLogin` — the exception skipped adding the player to the level and creating `player.input`, so the entity was never ticked and movement input did not exist while the world kept rendering and the game did not crash (the task runner catches and logs one line), matching "WASD dead on join with no errors"; servers with the mod negotiated the channel and never reproduced
+- The send is additionally wrapped in a `RuntimeException` guard (same philosophy as 2.4.15's server-side login hand-offs): a failing send inside the login flow now degrades to a warning instead of costing the rest of the login; `VirtualMachineError` still propagates
+
 ## v2.4.15
 
 **修复：聊天历史下发不再能踢掉进服玩家（三端）**
