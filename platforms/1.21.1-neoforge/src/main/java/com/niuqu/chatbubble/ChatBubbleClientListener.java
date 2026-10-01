@@ -112,7 +112,39 @@ public class ChatBubbleClientListener {
         // server routes group chat as packets and pushes the group directory.
         com.niuqu.chatbubble.chat.GroupChannelState.reset();
         com.niuqu.chatbubble.store.ChatMessageStore.clearSeenPlayers();
-        com.niuqu.chatbubble.packets.ClientHelloPayload.send();
+        announceToServer();
+    }
+
+    /**
+     * Sends the group-chat handshake — but only to servers that actually have
+     * the channel. NeoForge hard-throws on a serverbound payload the peer never
+     * negotiated ({@code NetworkRegistry#checkPacket}: optional registrations
+     * negotiate to nothing on a server without this mod), and this event fires
+     * from inside {@code ClientPacketListener#handleLogin}, one line before the
+     * player is added to the level and {@code player.input} is created. An
+     * unguarded send therefore aborted the rest of the login on every server
+     * without e33chat: the world kept rendering, but the input object never
+     * existed, so WASD stayed dead for the whole session while the server-side
+     * install (where the channel negotiates) worked fine. Client-only installs
+     * against vanilla and hybrid servers are a supported shape, so the hello is
+     * skipped — the group tab simply never appears — instead of sent.
+     */
+    private static void announceToServer() {
+        var listener = Minecraft.getInstance().getConnection();
+        if (listener == null || !listener.hasChannel(
+                com.niuqu.chatbubble.packets.ClientHelloPayload.TYPE.id())) {
+            ChatBubbleMod.LOGGER.info("[e33chat] Server has no e33chat channel; skipping client hello");
+            return;
+        }
+        try {
+            com.niuqu.chatbubble.packets.ClientHelloPayload.send();
+        } catch (RuntimeException e) {
+            // The hello is the one send that fires inside the login flow; a
+            // failure escaping here costs the rest of handleLogin (see above),
+            // so it is contained the same way the server side wraps its own
+            // login hand-offs (a59a8686).
+            ChatBubbleMod.LOGGER.warn("[e33chat] Client hello failed; continuing without server features", e);
+        }
     }
 
     @SubscribeEvent
