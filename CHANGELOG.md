@@ -1,5 +1,23 @@
 # Changelog
 
+## v2.4.17
+
+**修复：进服瞬间收到的聊天消息不再能把客户端踢下线（三端）**
+
+- 进服窗口期（本地玩家实体尚未就绪）到达的 `ClientboundSystemChatPacket` 会在聊天监听注入里解引用 `player.connection`，NeoForge 把包处理异常当作致命错误直接断开连接，表现即「刚进服就被踢」；该路径是竞态，是否触发取决于服务端插件是否在进服瞬间发系统消息（实报来自代理插件刚发的 `Sent server list`），因此不是每个人每次都复现
+- 三个平台的 `ChatListenerMixin` 注入全部改为判空：`connection` 取不到时归因层逐层安全退出，消息降级为灰字系统消息正常显示，不丢失、不断连；`onPlayerChat` 的自身 UUID 缓存同样加了守卫（跳过无害，只影响之后悄悄话转发的装饰名缓存）
+- `WhisperDetector` / `ChatPipeline` 里「先解引用后判空」的死代码改为真正的守卫——它们在判空路径上会被无条件调到，不同时修等于把崩溃从 mixin 往下挪一层
+- 2.4.14 / 2.4.16 均带此问题，本版三端一并修复
+
+----
+
+**Fixed: chat packets arriving at join time can no longer disconnect the client (all platforms)**
+
+- A `ClientboundSystemChatPacket` delivered during the join window (before the local player exists) hit an unconditional `player.connection` dereference inside the chat-listener injections; NeoForge treats a packet-handling exception as fatal and disconnects, so the symptom was "kicked right after joining". The path is racy — it only triggers when a server plugin sends a system message at join time (the field report came from a proxy plugin's just-sent `Sent server list`), which is why it did not reproduce for everyone
+- All three platform `ChatListenerMixin` injections are now null-safe: when `connection` is unavailable the attribution layers exit early and the message degrades to a plain gray system line — nothing is lost and the connection survives; the own-UUID decorated-name cache in `onPlayerChat` got the same guard (skipping it is harmless and only affects later outgoing-whisper reposts)
+- The dereference-before-null-check dead code in `WhisperDetector` / `ChatPipeline` became real guards — they run unconditionally on that same path, so leaving them intact would have moved the crash one layer down instead of removing it
+- Present in 2.4.14 and 2.4.16 alike; fixed for all three platforms in this release
+
 ## v2.4.16
 
 **修复：客户端单独安装在无 e33chat 服务器上 WASD 冻结（NeoForge 1.21.1）**

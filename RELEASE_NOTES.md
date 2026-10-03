@@ -1,5 +1,17 @@
 # Release Notes
 
+## v2.4.17
+
+**修复**
+
+- 刚进服就被踢下线的问题修好了（三端）：服务器或代理插件在进服瞬间发的系统聊天消息，会赶在客户端本地玩家就绪之前到达，此前的版本在这条路径上没有判空，NeoForge 直接把它当致命错误断开连接。现在这类消息会作为普通灰字系统消息正常显示，不再断连。该问题是竞态，只在「进服瞬间恰好有消息先到」时触发（实报是代理插件刚发的 `Sent server list`），所以此前不是每个人每次都遇到。2.4.14 / 2.4.16 均受影响。
+
+----
+
+**Fixed**
+
+- The "kicked right after joining" disconnect is fixed (all platforms): a system chat message sent by a server or proxy plugin at join time could arrive before the client's local player exists, and previous versions dereferenced it without a null check — NeoForge treats that as a fatal packet error and disconnects. Such messages now show up as ordinary gray system lines and the connection survives. The bug is racy and only fired when a message happened to land in that window (the field report was a proxy plugin's `Sent server list`), which is why it did not reproduce every time. 2.4.14 and 2.4.16 are both affected.
+
 ## v2.4.16
 
 **修复**
