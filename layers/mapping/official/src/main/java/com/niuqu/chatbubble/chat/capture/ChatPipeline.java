@@ -66,8 +66,10 @@ public final class ChatPipeline {
      */
     public static ChatMessageStore.SenderMeta tryParsePlayerLine(
             Component message, String text, String logTag) {
-        var connection = Minecraft.getInstance().player.connection;
-        if (connection == null) return null;
+        // Join-window guard: the caller can run before the local player exists.
+        var self = Minecraft.getInstance().player;
+        if (self == null) return null;
+        var connection = self.connection;
         var namesSet = new LinkedHashSet<String>();
         connection.getOnlinePlayers().forEach(info -> {
             for (String cand : ChatClassifier.nameCandidates(info)) namesSet.add(cand);

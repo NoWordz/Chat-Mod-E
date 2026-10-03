@@ -175,7 +175,10 @@ public class ChatListenerMixin {
             Text fullLine = params.applyChatDecoration(raw);
             senderName = extractDecoratedName(fullLine, rawStr, name, senderName);
         }
-        if (senderId != null && senderId.equals(MinecraftClient.getInstance().player.getUuid())) {
+        // Join-window guard: packets can arrive before the local player exists
+        // — skipping the cache is safe, dereferencing is not.
+        var self = MinecraftClient.getInstance().player;
+        if (senderId != null && self != null && senderId.equals(self.getUuid())) {
             ChatMessageStore.cacheOwnDecoratedName(senderName);
         }
         ChatMessageStore.debugLog("[e33chat] PlayerChat | raw='" + rawStr + "' | sender='" + senderName.getString() + "' | content='" + playerContent.getString() + "'");

@@ -18,8 +18,10 @@ public final class WhisperDetector {
     private WhisperDetector() {}
 
     public static ChatMessageStore.SenderMeta detectWhisperInSystemMessage(String text, String logTag) {
-        var connection = MinecraftClient.getInstance().player.networkHandler;
-        if (connection == null) return null;
+        // Join-window guard: the caller can run before the local player exists.
+        var self = MinecraftClient.getInstance().player;
+        if (self == null) return null;
+        var connection = self.networkHandler;
         // G3: 消息嵌 legacy 色码（S§6t§beve）时整条剥 § 再做名字锚点匹配
         String clean = text.replaceAll("§.", "");
         for (var info : connection.getPlayerList()) {

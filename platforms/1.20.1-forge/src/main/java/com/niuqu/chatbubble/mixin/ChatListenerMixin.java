@@ -194,7 +194,10 @@ public class ChatListenerMixin {
         }
         // Our own echoes never reach addMessage (echo guard returns early), so cache
         // the decorated name here — the outgoing whisper repost needs it later.
-        if (senderId != null && senderId.equals(Minecraft.getInstance().player.getUUID())) {
+        // Join-window guard: system/player packets can arrive before the local
+        // player exists — skipping the cache is safe, dereferencing is not.
+        var self = Minecraft.getInstance().player;
+        if (senderId != null && self != null && senderId.equals(self.getUUID())) {
             ChatMessageStore.cacheOwnDecoratedName(senderName);
         }
         boolean logW = isWhisper; String logWP = whisperPartner; Component logSN = senderName, logPC = playerContent;
@@ -279,7 +282,11 @@ public class ChatListenerMixin {
         }
 
         // bound.name() empty: try tell-click first (structural), then text parsing
-        var connection = Minecraft.getInstance().player.connection;
+        // Null-safe for the join window: the packet can land before the local
+        // player exists; the null check at the call sites degrades to the
+        // gray-text fallback, matching the fabric platform's shape.
+        var connection = Minecraft.getInstance().player != null
+            ? Minecraft.getInstance().player.connection : null;
 
         // Layer 2: tell-click attribution — structural detection before text parsing
         SenderMeta tc = detectByTellClick(message, msgStr);
@@ -319,7 +326,9 @@ public class ChatListenerMixin {
         ChatMessageStore.debugLog(() -> "[e33chat] System | text='" + sysText + "' | overlay=" + overlay);
 
         String text = message.getString();
-        var connection = Minecraft.getInstance().player.connection;
+        // Null-safe for the join window (same as onDisguisedChat above)
+        var connection = Minecraft.getInstance().player != null
+            ? Minecraft.getInstance().player.connection : null;
 
         // Template layer: server-declared formats parse exactly (strongest evidence).
         // Unconfigured or unmatched lines fall through to the heuristic guards below.
