@@ -108,12 +108,25 @@ public final class GroupRules {
         String displayName(UUID playerId);
     }
 
+    /**
+     * Whether a connection can actually receive v2 group data. One of the ACCEPT
+     * preconditions: a connection that never completed the {@code e33chat:groups}
+     * handshake cannot render group content, so letting it join would mint a silent,
+     * mute member (audit GroupsServerLogic finding 1). The adapter answers from its
+     * live handshake registry; the rule itself stays platform-free.
+     */
+    public interface ReceiverCheck {
+        boolean canReceive(UUID playerId);
+    }
+
     /** Everything a rule needs beyond the durable state and the request. */
-    public record Context(Limits limits, SequenceSource sequences, NameLookup names, long nowMs) {
+    public record Context(Limits limits, SequenceSource sequences, NameLookup names,
+                          ReceiverCheck receivers, long nowMs) {
         public Context {
             Objects.requireNonNull(limits, "limits");
             Objects.requireNonNull(sequences, "sequences");
             Objects.requireNonNull(names, "names");
+            Objects.requireNonNull(receivers, "receivers");
         }
     }
 
@@ -313,6 +326,14 @@ public final class GroupRules {
         if (record.access().isMember(actor.id())) {
             invitations.remove(invitation.id());
             return finish(current, groups, invitations, true, false, "e33chat.group.already_in", groupName);
+        }
+        // Sixth precondition: the accepting connection must have proved it can receive
+        // v2 group data. A connection that never acknowledged the groups channel would
+        // otherwise become a member who receives nothing (and the invitation would be
+        // spent). The invitation survives so the peer may retry after updating.
+        if (!context.receivers().canReceive(actor.id())) {
+            return finish(current, groups, invitations, changed, false,
+                "e33chat.group.action_upgrade");
         }
         if (record.access().visibleFromSequence().size() >= context.limits().maxMembers()) {
             // The invitation survives a full group: the invitee may retry after a kick.

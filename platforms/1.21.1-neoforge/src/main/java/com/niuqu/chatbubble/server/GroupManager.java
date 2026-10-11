@@ -3,6 +3,7 @@ package com.niuqu.chatbubble.server;
 import com.niuqu.chatbubble.config.ChatServerConfig;
 import com.niuqu.chatbubble.group.GroupAccess;
 import com.niuqu.chatbubble.group.GroupDirectoryEntry;
+import com.niuqu.chatbubble.group.GroupFeedback;
 import com.niuqu.chatbubble.group.GroupFileStore;
 import com.niuqu.chatbubble.group.GroupHistoryEntry;
 import com.niuqu.chatbubble.group.GroupHistoryPage;
@@ -738,7 +739,7 @@ public final class GroupManager {
 
     private static GroupRules.Context rulesContext() {
         return new GroupRules.Context(limits(), GroupManager::nextVisibleSequence,
-            GroupManager::playerName, System.currentTimeMillis());
+            GroupManager::playerName, groupV2Clients::contains, System.currentTimeMillis());
     }
 
     private static GroupRules.Limits limits() {
@@ -770,11 +771,22 @@ public final class GroupManager {
 
     // ==== feedback helpers ====
 
+    // Group action results — success or refusal — go to the action-bar overlay, never
+    // the chat log. The client tab filter (GroupChannelState.filterMessages) drops
+    // every system row that is not in the active tab, so a refusal delivered as chat
+    // is invisible exactly while the actor sits in the group tab the action came from
+    // (audit GroupsServerLogic finding 2, M4.3). The lane is decided by the shared
+    // {@link GroupFeedback} contract, so "overlay" here is the same fact the
+    // platform-free test pins.
+    static boolean overlayLane(String key) {
+        return GroupFeedback.survivesTabFilter(GroupFeedback.laneFor(key));
+    }
+
     private static void feedback(ServerPlayer p, String key, List<Object> args) {
-        p.sendSystemMessage(Component.translatable(key, args.toArray()));
+        p.displayClientMessage(Component.translatable(key, args.toArray()), overlayLane(key));
     }
 
     private static void fail(ServerPlayer p, String key, Object... args) {
-        p.sendSystemMessage(Component.translatable(key, args));
+        p.displayClientMessage(Component.translatable(key, args), overlayLane(key));
     }
 }

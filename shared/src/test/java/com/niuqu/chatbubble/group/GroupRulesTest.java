@@ -10,8 +10,10 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -328,6 +330,26 @@ class GroupRulesTest {
         assertFalse(joined.access().canReadLegacy(INVITEE));
         assertTrue(outcome.state().invitations().isEmpty());
         assertEquals(8L, sequenceCursor.get(GROUP));
+    }
+
+    @Test
+    void acceptRefusesWhenTheConnectionCannotReceiveGroupData() {
+        // Sixth precondition: a peer that never completed the groups handshake cannot
+        // render group content, so ACCEPT must refuse AND keep the invitation live for
+        // a retry once the peer updates (rather than mint a silent mute member).
+        GroupFileStore.Snapshot state = snapshot(Map.of(GROUP, owned(GROUP, "Guild", OWNER)),
+            Map.of(INVITE, invitation(INVITE, GROUP, OWNER, INVITEE, INVITE_CREATED, INVITE_EXPIRES)));
+
+        GroupRules.Outcome outcome = GroupRules.evaluate(state,
+            request(GroupRules.ACCEPT, null, null, INVITE, ""), actor(INVITEE),
+            contextRefusingReceivers(LIMITS, NOW));
+
+        assertEquals("e33chat.group.action_upgrade", outcome.messageKey());
+        assertFalse(outcome.accepted());
+        assertFalse(outcome.changed());
+        assertSame(state, outcome.state());
+        assertEquals(Set.of(INVITE), outcome.state().invitations().keySet());
+        assertFalse(outcome.state().groups().get(GROUP).access().isMember(INVITEE));
     }
 
     // ==== reject / revoke ====
@@ -838,6 +860,53 @@ class GroupRulesTest {
         assertNull(GroupRules.groupByName(state, null));
     }
 
+    // ==== frozen action contract (M4.1) ====
+
+    @Test
+    void actionCodesAreFrozenAndOrdered() {
+        assertEquals(0, GroupRules.CREATE);
+        assertEquals(1, GroupRules.INVITE);
+        assertEquals(2, GroupRules.ACCEPT);
+        assertEquals(3, GroupRules.REJECT);
+        assertEquals(4, GroupRules.REVOKE);
+        assertEquals(5, GroupRules.LEAVE);
+        assertEquals(6, GroupRules.RENAME);
+        assertEquals(7, GroupRules.KICK);
+        assertEquals(8, GroupRules.TRANSFER_OWNER);
+        assertEquals(9, GroupRules.DISBAND);
+        assertEquals(new UUID(0L, 0L), GroupRules.NO_SUBJECT, "unused UUID fields are the all-zero UUID");
+    }
+
+    @Test
+    void requestNormalizesUnusedFieldsAndRejectsUnknownCodes() {
+        GroupRules.Request normalized = request(GroupRules.CREATE, null, null, null, null);
+        assertEquals(GroupRules.NO_SUBJECT, normalized.groupId());
+        assertEquals(GroupRules.NO_SUBJECT, normalized.subjectId());
+        assertEquals(GroupRules.NO_SUBJECT, normalized.invitationId());
+        assertEquals("", normalized.value(), "an unused value is the empty string");
+
+        assertThrows(IllegalArgumentException.class, () -> request(-1, null, null, null, ""));
+        assertThrows(IllegalArgumentException.class, () -> request(10, null, null, null, ""));
+    }
+
+    @Test
+    void everyActionCodeIsDispatchedAndRefusedForUnknownFields() {
+        // A well-formed request for each frozen code must route to a real action (never
+        // an unhandled default): each one returns an outcome with a message key rather
+        // than throwing, except CREATE which succeeds.
+        GroupRules.Context ctx = context(NOW);
+        for (int action = GroupRules.CREATE; action <= GroupRules.DISBAND; action++) {
+            GroupRules.Outcome outcome = GroupRules.evaluate(emptySnapshot(),
+                request(action, null, null, null, "Guild"), actor(OWNER), ctx);
+            if (action == GroupRules.CREATE) {
+                assertTrue(outcome.accepted(), "CREATE on empty state succeeds");
+            } else {
+                assertNotNull(outcome.messageKey(), "action " + action + " reports a reason");
+                assertFalse(outcome.accepted(), "action " + action + " has nothing to act on");
+            }
+        }
+    }
+
     // ==== fixtures ====
 
     private GroupRules.Context context(long nowMs) {
@@ -848,6 +917,16 @@ class GroupRulesTest {
         return new GroupRules.Context(limits,
             groupId -> sequenceCursor.merge(groupId, 1L, Long::sum),
             playerId -> playerNames.getOrDefault(playerId, playerId.toString()),
+            playerId -> true,
+            nowMs);
+    }
+
+    /** A context whose ACCEPT receiver gate refuses everyone (an un-ACKed client). */
+    private GroupRules.Context contextRefusingReceivers(GroupRules.Limits limits, long nowMs) {
+        return new GroupRules.Context(limits,
+            groupId -> sequenceCursor.merge(groupId, 1L, Long::sum),
+            playerId -> playerNames.getOrDefault(playerId, playerId.toString()),
+            playerId -> false,
             nowMs);
     }
 

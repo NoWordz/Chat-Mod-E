@@ -3,6 +3,7 @@ package com.niuqu.chatbubble.server;
 import com.niuqu.chatbubble.ChatBubbleMod;
 import com.niuqu.chatbubble.group.GroupAccess;
 import com.niuqu.chatbubble.group.GroupDirectoryEntry;
+import com.niuqu.chatbubble.group.GroupFeedback;
 import com.niuqu.chatbubble.group.GroupFileStore;
 import com.niuqu.chatbubble.group.GroupHistoryEntry;
 import com.niuqu.chatbubble.group.GroupHistoryPage;
@@ -735,7 +736,7 @@ public final class GroupManager {
 
     private static GroupRules.Context rulesContext() {
         return new GroupRules.Context(limits(), GroupManager::nextVisibleSequence,
-            GroupManager::playerName, System.currentTimeMillis());
+            GroupManager::playerName, groupV2Clients::contains, System.currentTimeMillis());
     }
 
     private static GroupRules.Limits limits() {
@@ -766,11 +767,17 @@ public final class GroupManager {
 
     // ==== feedback helpers ====
 
+    // The lane is the shared GroupFeedback contract: action results always use the
+    // overlay, which the client tab filter cannot drop (GroupsServerLogic finding 2).
+    static boolean overlayLane(String key) {
+        return GroupFeedback.survivesTabFilter(GroupFeedback.laneFor(key));
+    }
+
     private static void feedback(ServerPlayerEntity p, String key, List<Object> args) {
-        p.sendMessage(Text.translatable(key, args.toArray()), false);
+        p.sendMessage(Text.translatable(key, args.toArray()), overlayLane(key));
     }
 
     private static void fail(ServerPlayerEntity p, String key, Object... args) {
-        p.sendMessage(Text.translatable(key, args), false);
+        p.sendMessage(Text.translatable(key, args), overlayLane(key));
     }
 }
