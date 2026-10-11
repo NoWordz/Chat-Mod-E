@@ -1246,6 +1246,10 @@ public class ChatBubbleScreen extends ChatScreen {
                     // browser URLs; opening them throws URISyntaxException. Only
                     // hand http(s) to the vanilla handler.
                     String clickUrl = click.getValue();
+                    if (com.niuqu.chatbubble.logic.ImagePreviewLink.isPreviewClick(clickUrl)) {
+                        openImageViewer(com.niuqu.chatbubble.logic.ImagePreviewLink.decode(clickUrl));
+                        return true;
+                    }
                     if (clickUrl != null && (clickUrl.startsWith("http://") || clickUrl.startsWith("https://"))) {
                         handleTextClick(style);
                     }
@@ -2167,13 +2171,24 @@ public class ChatBubbleScreen extends ChatScreen {
                 Util.getOperatingSystem().open(file);
             } else if (click.getAction() == ClickEvent.Action.OPEN_URL) {
                 String clickUrl = click.getValue();
-                if (clickUrl != null && (clickUrl.startsWith("http://") || clickUrl.startsWith("https://"))) {
+                if (com.niuqu.chatbubble.logic.ImagePreviewLink.isPreviewClick(clickUrl)) {
+                    openImageViewer(com.niuqu.chatbubble.logic.ImagePreviewLink.decode(clickUrl));
+                } else if (clickUrl != null && (clickUrl.startsWith("http://") || clickUrl.startsWith("https://"))) {
                     handleTextClick(style);
                 }
             } else {
                 handleTextClick(style);
             }
         }
+    }
+
+    /** M8 (§13 D3): opens the full-screen image preview over the chat. The chat
+     *  screen instance is kept as the parent, so closing the viewer returns to the
+     *  same scroll position (the field survives setScreen away/back). */
+    private void openImageViewer(String url) {
+        if (url == null || url.isBlank()) return;
+        textSelection.clear();
+        client.setScreen(new com.niuqu.chatbubble.ui.ImagePreviewScreen(this, url));
     }
 
     private boolean isPanelSliding() {
@@ -2283,25 +2298,24 @@ public class ChatBubbleScreen extends ChatScreen {
             : new com.niuqu.chatbubble.image.AnimatedImageLoader.FrameTex(tex, animated.width(), animated.height());
     }
 
-    /** Height in px for one bubble-less image (state-dependent, panel-clamped, never upscaled). */
+    /** Height in px for one inline image thumbnail (M8 §13 D3: small, never upscaled). */
     private int imageEdgeHeight(String url, String nameHint) {
         int maxW = Math.max(80, panelW - Appearance.avatarSize() - PAD * 2 - 16);
         var animated = animatedEntry(url, nameHint);
         if (animated != null && animated.ready() && animated.width() > 0 && animated.height() > 0) {
-            float ratio = Math.min((float) maxW / animated.width(),
-                (float) maxW / animated.height());
-            ratio = Math.min(1f, ratio);
-            return Math.max(1, (int) (animated.height() * ratio));
+            return com.niuqu.chatbubble.logic.ImageGeometry.thumbnailSize(animated.width(), animated.height(),
+                com.niuqu.chatbubble.logic.ImageGeometry.THUMBNAIL_MAX_LONG_EDGE, maxW)[1];
         }
         ImageEntry entry = animatedPending(animated) ? null : ImageLoader.getOrLoad(url);
         if (entry != null && entry.state() == ImageEntry.State.LOADED
                 && entry.width() > 0 && entry.height() > 0) {
-            float ratio = Math.min((float) maxW / entry.width(),
-                (float) maxW / entry.height());
-            ratio = Math.min(1f, ratio);
-            return Math.max(1, (int) (entry.height() * ratio));
+            return com.niuqu.chatbubble.logic.ImageGeometry.thumbnailSize(entry.width(), entry.height(),
+                com.niuqu.chatbubble.logic.ImageGeometry.THUMBNAIL_MAX_LONG_EDGE, maxW)[1];
         }
-        return maxW;
+        // Still loading: the placeholder is the same small square, so the row no
+        // longer starts at the panel width and then jumps when the image decodes.
+        return com.niuqu.chatbubble.logic.ImageGeometry.thumbnailPlaceholder(
+            com.niuqu.chatbubble.logic.ImageGeometry.THUMBNAIL_MAX_LONG_EDGE, maxW)[1];
     }
 
     private void renderBubble(DrawContext g, ChatMessageStore.ChatMessage msg, int index, int baseY, int mouseX, int mouseY, float alpha, boolean showAvatar) {
@@ -2534,29 +2548,29 @@ public class ChatBubbleScreen extends ChatScreen {
             y += lines.size() * textRenderer.fontHeight;
         }
 
-        // Long-edge clamped to the panel's usable width so a narrow window/guiScale
-        // can never push the image off-screen; small images keep their real size.
+        // M8 (§13 D3): inline images are always small thumbnails; the not-yet-loaded
+        // placeholder is the same small square, so nothing jumps when it decodes.
         int maxImgW = Math.max(80, panelW - Appearance.avatarSize() - PAD * 2 - 16);
 
         for (var ref : parsed.images()) {
-            int w = maxImgW, h = maxImgW;
+            int[] ph = com.niuqu.chatbubble.logic.ImageGeometry.thumbnailPlaceholder(
+                com.niuqu.chatbubble.logic.ImageGeometry.THUMBNAIL_MAX_LONG_EDGE, maxImgW);
+            int w = ph[0], h = ph[1];
             var animated = animatedEntry(ref.url(), ref.name());
             var animatedFrame = animatedTex(animated);
             if (animatedFrame != null && animatedFrame.width() > 0 && animatedFrame.height() > 0) {
-                float ratio = Math.min((float) maxImgW / animatedFrame.width(),
-                    (float) maxImgW / animatedFrame.height());
-                ratio = Math.min(1f, ratio);
-                w = Math.max(1, (int) (animatedFrame.width() * ratio));
-                h = Math.max(1, (int) (animatedFrame.height() * ratio));
+                int[] th = com.niuqu.chatbubble.logic.ImageGeometry.thumbnailSize(
+                    animatedFrame.width(), animatedFrame.height(),
+                    com.niuqu.chatbubble.logic.ImageGeometry.THUMBNAIL_MAX_LONG_EDGE, maxImgW);
+                w = th[0]; h = th[1];
             } else {
                 ImageEntry entry = animatedPending(animated) ? null : ImageLoader.getOrLoad(ref.url());
                 if (entry != null && entry.state() == ImageEntry.State.LOADED
                         && entry.width() > 0 && entry.height() > 0) {
-                    float ratio = Math.min((float) maxImgW / entry.width(),
-                        (float) maxImgW / entry.height());
-                    ratio = Math.min(1f, ratio); // never upscale
-                    w = Math.max(1, (int) (entry.width() * ratio));
-                    h = Math.max(1, (int) (entry.height() * ratio));
+                    int[] th = com.niuqu.chatbubble.logic.ImageGeometry.thumbnailSize(
+                        entry.width(), entry.height(),
+                        com.niuqu.chatbubble.logic.ImageGeometry.THUMBNAIL_MAX_LONG_EDGE, maxImgW);
+                    w = th[0]; h = th[1];
                 }
             }
             int imgX = own ? (avatarX - UiTokens.AVATAR_NAME_GAP - w) : (avatarX + Appearance.avatarSize() + UiTokens.AVATAR_GAP);
@@ -2580,9 +2594,11 @@ public class ChatBubbleScreen extends ChatScreen {
                         ChatBubbleTheme.alphaBlend(limited ? 0xFFFF5555 : c().textSecondary(), (int) (255 * alpha)), false);
                 }
             }
-            // Open the URL in the system browser on click; hover shows the URL
+            // M8: the primary click opens the in-game preview (the marker tells the
+            // screen so); the system browser stays reachable from a viewer button.
             Style st = Style.EMPTY
-                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, ref.url()))
+                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL,
+                    com.niuqu.chatbubble.logic.ImagePreviewLink.encode(ref.url())))
                 .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Text.literal(ref.url())));
             clickableSpans.add(new ClickableSpan(imgX, y, w, h, st));
             y += h + 2;
