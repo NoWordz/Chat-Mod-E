@@ -61,6 +61,16 @@ public final class ImageLoader {
     /** Shared HTTP client (also used by ImageUploader). */
     public static HttpClient client() { return CLIENT; }
 
+    /**
+     * Redirect mode the shared client is built with — must stay
+     * {@link HttpClient.Redirect#NEVER}. Redirects are followed by
+     * {@link SafeHttpFetch}, which re-runs the SSRF policy on every hop; if this
+     * ever reads {@code NORMAL} the transport follows a 302 itself and the guard
+     * is silently bypassed again (audit SEC-1/B8). Package-visible so a test can
+     * pin the wiring rather than trust it.
+     */
+    static HttpClient.Redirect redirectPolicy() { return CLIENT.followRedirects(); }
+
     /** Shared worker pool (also used by ImageUploader). */
     public static java.util.concurrent.ExecutorService executor() { return EXEC; }
 

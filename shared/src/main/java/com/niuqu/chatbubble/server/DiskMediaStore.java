@@ -8,7 +8,6 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 /**
@@ -56,15 +55,6 @@ public final class DiskMediaStore {
     static final long SESSION_TTL_MILLIS = 5L * 60 * 1000;
 
     private static final Pattern MEDIA_ID = Pattern.compile("[0-9a-f]{32}");
-
-    /** Test/telemetry probe: number of full directory walks performed. The chunk
-     *  path must never bump this (audit M11). */
-    private static final AtomicInteger DIRECTORY_SCANS = new AtomicInteger();
-
-    /** Full directory walks since class load (test probe for M11). */
-    public static int directoryScanCount() {
-        return DIRECTORY_SCANS.get();
-    }
 
     private final Path dir;
     private final long maxSingle;
@@ -379,14 +369,14 @@ public final class DiskMediaStore {
      * after a restart. Ownership is unknown for pre-existing files, so the
      * per-player counters only cover files stored since this instance started;
      * the global counters cover everything. Called under the monitor; never from
-     * the chunk path.
+     * the chunk path. A test wraps {@link #dir} in a counting filesystem
+     * ({@code CountingFileSystem}) to prove the chunk path does not walk.
      */
     private boolean bootstrapDone() {
         if (bootstrapped) return true;
         bootstrapped = true;
         try {
             if (!Files.isDirectory(dir)) return true;
-            DIRECTORY_SCANS.incrementAndGet();
             try (var stream = Files.walk(dir)) {
                 long[] bytes = {0};
                 int[] files = {0};

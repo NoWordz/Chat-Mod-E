@@ -159,21 +159,39 @@ class DiskMediaStoreTest {
 
     // ---- M1 defect 3: acceptChunk must not walk the directory (M11) ----
 
+    /**
+     * The real M11 probe. The store is pointed at a directory whose filesystem
+     * counts every directory enumeration, so an old {@code dirSize()} —
+     * {@code Files.walk(dir)} returning inside {@code acceptChunk} — is observed
+     * and fails this test. Asserting a production counter would not do that:
+     * such a counter only moves where the production code chooses to bump it, so
+     * a re-introduced raw walk would leave it untouched (the earlier version of
+     * this test passed with the walk put back).
+     */
     @Test
     void acceptChunkDoesNotScanTheDirectory() throws IOException {
-        Path dir = Files.createTempDirectory("e33media");
-        DiskMediaStore store = new DiskMediaStore(dir);
-        // Seed a bunch of committed files so an O(files) walk would be obvious.
+        Path real = Files.createTempDirectory("e33media");
+        // Seed files so an O(files) walk would be obvious.
         for (int i = 0; i < 50; i++) {
-            Files.write(dir.resolve(DiskMediaStore.newMediaId()), new byte[16]);
+            Files.write(real.resolve(DiskMediaStore.newMediaId()), new byte[16]);
         }
-        store.beginUpload(1, "alice", 3, 1_500, "image/png");
-        int before = DiskMediaStore.directoryScanCount();
+        CountingFileSystem.Wrapped counting = CountingFileSystem.wrap(real);
+        DiskMediaStore store = new DiskMediaStore(counting.path());
+        assertNull(store.beginUpload(1, "alice", 3, 1_500, "image/png"));
+        int before = counting.directoryStreamCount();
         assertNull(store.acceptChunk(1, 0, new byte[600]));
         assertNull(store.acceptChunk(1, 1, new byte[600]));
         assertNotNull(store.acceptChunk(1, 2, new byte[300])); // final chunk returns the mediaId
-        assertEquals(before, DiskMediaStore.directoryScanCount(),
-            "acceptChunk must answer the quota from incremental counters, not Files.walk");
+        assertEquals(before, counting.directoryStreamCount(),
+            "acceptChunk must answer the quota from incremental counters, not enumerate the directory");
+
+        // Sanity: the probe is live — an explicit walk over the same wrapped
+        // directory does move the count, so a blank result above cannot be a
+        // broken probe.
+        int probeBefore = counting.directoryStreamCount();
+        try (var s = Files.walk(counting.path())) { s.forEach(p -> {}); }
+        assertTrue(counting.directoryStreamCount() > probeBefore,
+            "the counting filesystem must observe a real Files.walk");
     }
 
     @Test
