@@ -65,6 +65,10 @@
       "platforms": ["1.20.1-forge", "1.21.1-neoforge"]
     },
     {
+      "path": "src/test/java/com/niuqu/chatbubble/render/ChatBubbleScreenSidebarWiringTest.java",
+      "platforms": ["1.20.1-forge", "1.21.1-neoforge"]
+    },
+    {
       "path": "src/test/java/com/niuqu/chatbubble/render/ChatContextMenusTest.java",
       "platforms": ["1.20.1-forge", "1.21.1-neoforge"]
     },

@@ -461,6 +461,47 @@ public class ChatBubbleScreen extends ChatScreen {
 
     private static final int SIDEBAR_SEARCH_H = 14;
 
+    // ---- Sidebar click-route seams (pure, headless-testable) ----
+    // The three targets' mouseClicked delegate their sidebar bands here so the
+    // geometry and the channel decision each have one implementation, pinned by
+    // unit tests. (M5 review: the 「世界频道」 row branch had no test at all, so a
+    // revert to "clear whisper, change no tab" stayed green.)
+
+    /** The fixed 「世界频道」 row band: one row starting under the search box. */
+    static boolean isWorldRowHit(double mouseY) {
+        return mouseY >= SidebarModel.PUBLIC_Y && mouseY <= SidebarModel.PUBLIC_Y + SidebarModel.ROW_H;
+    }
+
+    /**
+     * The 「世界频道」 row click. Leaves a group tab to 全部 (never 世界, whose
+     * filter drops system rows) and ends any whisper view; on a pseudo tab it is a
+     * 2.4.17 no-op. Delegates to the shared machine so the three targets agree.
+     *
+     * @return whether the click landed on the row (and was handled)
+     */
+    static boolean handleSidebarWorldRowClick(double mouseY) {
+        if (!isWorldRowHit(mouseY)) return false;
+        com.niuqu.chatbubble.chat.GroupChannelState.selectWorldRow();
+        return true;
+    }
+
+    /** A group row is drawn/clickable only while it fits above the list bottom. */
+    static boolean isGroupRowVisible(int rowY, int listEnd) {
+        return rowY + SidebarModel.ROW_H <= listEnd;
+    }
+
+    /** A click inside an already-visible group row. */
+    static boolean isGroupRowHit(double mouseY, int rowY) {
+        return mouseY >= rowY && mouseY <= rowY + SidebarModel.ROW_H;
+    }
+
+    /** The pinned 「＋ 创建群组」 band, including its 4px side inset. */
+    static boolean isCreateButtonHit(double mouseY, double localX, int panelBottom) {
+        int createY = SidebarModel.createButtonY(panelBottom);
+        return mouseY >= createY && mouseY <= createY + SidebarModel.CREATE_BTN_H
+            && localX >= SidebarModel.CREATE_INSET && localX <= SidebarModel.WIDTH - SidebarModel.CREATE_INSET;
+    }
+
     private void renderSidebar(GuiGraphics g, int mouseX, int mouseY, float alpha) {
         sidebarMaxScroll = ChatSidebar.render(g, font, mouseX, mouseY, c(), panelW,
             msgBottom > 0 ? msgBottom : height - BAR_H, com.niuqu.chatbubble.chat.GroupChannelState.whisperPartner(),
@@ -1016,18 +1057,16 @@ public class ChatBubbleScreen extends ChatScreen {
                 setFocused(input);
             }
 
-            int y = searchY + searchH + 3;
-            if (mouseY >= y && mouseY <= y + 22) {
-                // The 「世界频道」 row: shared ChannelStateMachine leaves a group
-                // tab to 全部 (never 世界 — its filter drops system rows) and ends
-                // any whisper view; on a pseudo tab it is a 2.4.17 no-op.
-                com.niuqu.chatbubble.chat.GroupChannelState.selectWorldRow();
+            // The 「世界频道」 row: shared ChannelStateMachine leaves a group tab to
+            // 全部 (never 世界 — its filter drops system rows) and ends any whisper
+            // view; on a pseudo tab it is a 2.4.17 no-op. The band + the decision live
+            // in handleSidebarWorldRowClick so a unit test can pin the B1 fix.
+            if (handleSidebarWorldRowClick(mouseY)) {
                 sidebarSearchBox.setValue("");
                 setFocused(input);
                 scrollToBottom = true;
                 return true;
             }
-            y += 22 + 2;
             // Group rows (v2 groups + pre-2.5 legacy tabs): a click opens that channel.
             // Clipped to the list bottom exactly like the draw, so a group row can never
             // shadow the create button below it.
@@ -1038,8 +1077,8 @@ public class ChatBubbleScreen extends ChatScreen {
             int lastGroupRow = SidebarModel.groupWindowEnd(sidebarTabs.size(), firstGroupRow);
             for (int i = firstGroupRow; i < lastGroupRow; i++) {
                 int gy = SidebarModel.groupWindowRowY(sidebarTabs.size(), i, firstGroupRow);
-                if (gy + 22 > sidebarListEnd) break; // clipped: neither drawn nor clickable
-                if (mouseY >= gy && mouseY <= gy + 22) {
+                if (!isGroupRowVisible(gy, sidebarListEnd)) break; // clipped: neither drawn nor clickable
+                if (isGroupRowHit(mouseY, gy)) {
                     com.niuqu.chatbubble.chat.GroupChannelState.selectGroup(sidebarTabs.get(i));
                     // Switching channels dismisses any context menu still on screen.
                     contextAvatarTarget = null;
@@ -1052,13 +1091,11 @@ public class ChatBubbleScreen extends ChatScreen {
                 }
             }
             // 「＋ 创建群组」: the standalone button pinned above the input bar.
-            int createY = SidebarModel.createButtonY(sidebarBottom);
-            if (mouseY >= createY && mouseY <= createY + SidebarModel.CREATE_BTN_H
-                && origX - sidebarX >= 4 && origX - sidebarX <= SIDEBAR_W - 4) {
+            if (isCreateButtonHit(mouseY, origX - sidebarX, sidebarBottom)) {
                 openGroupBrowserForCreate();
                 return true;
             }
-            y = SidebarModel.playerStartY(sidebarTabs.size());
+            int y = SidebarModel.playerStartY(sidebarTabs.size());
             int sidebarTop = y;
             if (minecraft.player != null && minecraft.player.connection != null) {
                 var players = new ArrayList<>(minecraft.player.connection.getOnlinePlayers());

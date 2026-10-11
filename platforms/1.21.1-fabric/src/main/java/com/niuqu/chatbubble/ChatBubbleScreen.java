@@ -15,6 +15,7 @@ import com.niuqu.chatbubble.render.RoundRectRenderer;
 import com.niuqu.chatbubble.render.UiLayout;
 import com.niuqu.chatbubble.render.MessageGrouping;
 import com.niuqu.chatbubble.render.UiTokens;
+import com.niuqu.chatbubble.logic.SidebarModel;
 import com.niuqu.chatbubble.store.BlockList;
 import com.niuqu.chatbubble.ui.EmoteStore;
 import com.niuqu.chatbubble.image.BracketCodec;
@@ -503,6 +504,47 @@ public class ChatBubbleScreen extends ChatScreen {
     }
 
     private static final int SIDEBAR_SEARCH_H = 14;
+
+    // ---- Sidebar click-route seams (pure, headless-testable) ----
+    // The three targets' mouseClicked delegate their sidebar bands here so the
+    // geometry and the channel decision each have one implementation, pinned by
+    // unit tests. (M5 review: the 「世界频道」 row branch had no test at all, so a
+    // revert to "clear whisper, change no tab" stayed green.)
+
+    /** The fixed 「世界频道」 row band: one row starting under the search box. */
+    static boolean isWorldRowHit(double mouseY) {
+        return mouseY >= SidebarModel.PUBLIC_Y && mouseY <= SidebarModel.PUBLIC_Y + SidebarModel.ROW_H;
+    }
+
+    /**
+     * The 「世界频道」 row click. Leaves a group tab to 全部 (never 世界, whose
+     * filter drops system rows) and ends any whisper view; on a pseudo tab it is a
+     * 2.4.17 no-op. Delegates to the shared machine so the three targets agree.
+     *
+     * @return whether the click landed on the row (and was handled)
+     */
+    static boolean handleSidebarWorldRowClick(double mouseY) {
+        if (!isWorldRowHit(mouseY)) return false;
+        com.niuqu.chatbubble.chat.GroupChannelState.selectWorldRow();
+        return true;
+    }
+
+    /** A group row is drawn/clickable only while it fits above the list bottom. */
+    static boolean isGroupRowVisible(int rowY, int listEnd) {
+        return rowY + SidebarModel.ROW_H <= listEnd;
+    }
+
+    /** A click inside an already-visible group row. */
+    static boolean isGroupRowHit(double mouseY, int rowY) {
+        return mouseY >= rowY && mouseY <= rowY + SidebarModel.ROW_H;
+    }
+
+    /** The pinned 「＋ 创建群组」 band, including its 4px side inset. */
+    static boolean isCreateButtonHit(double mouseY, double localX, int panelBottom) {
+        int createY = SidebarModel.createButtonY(panelBottom);
+        return mouseY >= createY && mouseY <= createY + SidebarModel.CREATE_BTN_H
+            && localX >= SidebarModel.CREATE_INSET && localX <= SidebarModel.WIDTH - SidebarModel.CREATE_INSET;
+    }
 
     private void renderSidebar(DrawContext g, int mouseX, int mouseY, float alpha) {
         ColoredTextureRenderer.drawWithAlpha(g, UiTextureManager.rl(UiElement.SIDEBAR_BG), 0, 0, SIDEBAR_W, height, alpha);
@@ -1193,18 +1235,13 @@ public class ChatBubbleScreen extends ChatScreen {
             }
             if (sidebarSearchBox.isFocused()) setFocused(chatField);
 
-            int y2 = searchY + searchH + 3;
-            if (mouseY >= y2 && mouseY <= y2 + SIDEBAR_ITEM_H) {
-                // This row is the sidebar's own channel entry, so it must also be able to
-                // leave a group tab. 全部, not TAB_WORLD — that tab's filter drops system
-                // rows. See the forge twin for the full note.
-                if (groupTabs().contains(com.niuqu.chatbubble.chat.GroupChannelState.active())) {
-                    com.niuqu.chatbubble.chat.GroupChannelState.setActive(
-                        com.niuqu.chatbubble.chat.GroupChannelState.TAB_ALL);
-                }
-                com.niuqu.chatbubble.chat.GroupChannelState.selectWorldRow(); sidebarSearchBox.setText(""); setFocused(chatField); scrollToBottom = true; return true;
+            // This row is the sidebar's own channel entry, so it must also be able to
+            // leave a group tab; handleSidebarWorldRowClick routes through the shared
+            // machine, which selects 全部 (never TAB_WORLD — that filter drops system
+            // rows) and ends any whisper view. See the forge twin for the full note.
+            if (handleSidebarWorldRowClick(mouseY)) {
+                sidebarSearchBox.setText(""); setFocused(chatField); scrollToBottom = true; return true;
             }
-            y2 += SIDEBAR_ITEM_H + 2;
             // Group rows (v2 groups + pre-2.5 legacy tabs): a click opens that channel.
             // Clipped to the list bottom exactly like the draw, so a group row can never
             // shadow the create button below it.
@@ -1219,8 +1256,8 @@ public class ChatBubbleScreen extends ChatScreen {
             for (int i = firstGroupRow; i < lastGroupRow; i++) {
                 int gy = com.niuqu.chatbubble.logic.SidebarModel.groupWindowRowY(
                     sidebarTabs.size(), i, firstGroupRow);
-                if (gy + SIDEBAR_ITEM_H > sidebarListEnd) break; // clipped: neither drawn nor clickable
-                if (mouseY >= gy && mouseY <= gy + SIDEBAR_ITEM_H) {
+                if (!isGroupRowVisible(gy, sidebarListEnd)) break; // clipped: neither drawn nor clickable
+                if (isGroupRowHit(mouseY, gy)) {
                     com.niuqu.chatbubble.chat.GroupChannelState.selectGroup(sidebarTabs.get(i));
                     // Switching channels dismisses any context menu still on screen.
                     contextAvatarTarget = null;
@@ -1230,16 +1267,12 @@ public class ChatBubbleScreen extends ChatScreen {
                 }
             }
             // 「＋ 创建群组」: the standalone button pinned above the input bar.
-            int createY = com.niuqu.chatbubble.logic.SidebarModel.createButtonY(
-                sidebarBottom);
-            if (mouseY >= createY
-                && mouseY <= createY + com.niuqu.chatbubble.logic.SidebarModel.CREATE_BTN_H
-                && origX - sidebarX >= 4 && origX - sidebarX <= SIDEBAR_W - 4) {
+            if (isCreateButtonHit(mouseY, origX - sidebarX, sidebarBottom)) {
                 openGroupBrowserForCreate();
                 return true;
             }
             int sidebarTop = com.niuqu.chatbubble.logic.SidebarModel.playerStartY(sidebarTabs.size());
-            y2 = sidebarTop;
+            int y2 = sidebarTop;
             if (client.player != null && client.player.networkHandler != null) {
                 var players = new ArrayList<>(client.player.networkHandler.getPlayerList());
                 String selfName = client.player.getName().getString();
