@@ -753,6 +753,79 @@ def check_lang_keys(targets: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Referenced-key check: every key the UI code asks for must exist in the tables
+# ---------------------------------------------------------------------------
+
+# A translation key literal in Java: a double-quoted "e33chat.<...>" string. Resource
+# locations use a colon (e33chat:textures/...) so the dotted form only ever appears as a
+# lang key (verified: every dotted literal in the tree is present in the tables).
+# Literals ending in "." are prefix concatenations ("e33chat.theme." + NAME); they are
+# checked as a namespace instead of an exact key.
+UI_LANG_KEY_RE = re.compile(r'"(e33chat\.[A-Za-z0-9_.]+)"')
+UI_LANG_EXTRA_ROOTS = ["shared/src/main/java", "layers"]
+
+
+def collect_referenced_lang_keys(targets: dict) -> tuple[set, set]:
+    """All "e33chat.*" string literals the client UI code references: exact keys plus the
+    prefix namespaces built by string concatenation. Sources scanned are each buildable
+    target's src/main/java, plus shared/ and layers/ (they compile into every target)."""
+    roots = []
+    for name in sorted(targets):
+        t = targets[name]
+        if not isinstance(t, dict):
+            continue
+        project = t.get("project")
+        if project and (ROOT / project).is_dir():
+            roots.append(ROOT / project / "src" / "main" / "java")
+    roots += [ROOT / r for r in UI_LANG_EXTRA_ROOTS]
+    exact: set = set()
+    prefix: set = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for f in root.rglob("*.java"):
+            posix = f.as_posix()
+            if "/build/" in posix or "/src/test/" in posix:
+                continue
+            text = f.read_text(encoding="utf-8", errors="replace")
+            for m in UI_LANG_KEY_RE.finditer(text):
+                key = m.group(1)
+                (prefix if key.endswith(".") else exact).add(key)
+    return exact, prefix
+
+
+def check_lang_references(targets: dict) -> None:
+    """界面代码引用的每个键都必须在语言表里存在。缺键时 MC 会把原始键名画到界面上
+    （"文本暴露了包名"），这正是要拦住的 bug —— 只比语言表之间的键集合是抓不到的，
+    因为三端可以一起缺同一个键。前缀拼接（"e33chat.theme." + NAME）只要求命名空间下
+    至少有一个键。"""
+    exact, prefix = collect_referenced_lang_keys(targets)
+    if not exact:
+        fail("没有任何 e33chat.* 界面键被扫到 —— 源码根路径写错了？")
+        return
+
+    for name in sorted(targets):
+        t = targets[name]
+        project = t.get("project") if isinstance(t, dict) else None
+        if not project or not (ROOT / project).is_dir():
+            continue
+        root = ROOT / "platforms" / name / "src" / "main" / "resources" / "assets" / "e33chat" / "lang"
+        if not root.is_dir():
+            continue
+        for f in sorted(root.glob("*.json")):
+            try:
+                table = json.loads(f.read_text(encoding="utf-8", errors="replace"))
+            except ValueError:
+                continue  # check_lang_keys 已经报过 JSON 错误
+            rel = f.relative_to(ROOT).as_posix()
+            for key in sorted(exact - set(table)):
+                fail(f"{rel} 缺界面引用的键 {key} —— 该目标上界面会显示原始键名而不是文案")
+            for ns in sorted(prefix):
+                if not any(k.startswith(ns) for k in table):
+                    fail(f"{rel} 没有任何 {ns}* 键 —— 界面上的拼接键（{ns} + 名称）会全部落到原始键名")
+
+
+# ---------------------------------------------------------------------------
 # Zero-MC guard for the shared logic layer
 # ---------------------------------------------------------------------------
 
@@ -1060,6 +1133,7 @@ def main() -> int:
     check_resource_paths(paths_raw)
     check_ui_textures(targets)
     check_lang_keys(targets)
+    check_lang_references(targets)
     check_shared_logic_zero_mc()
     check_shared_dependencies(load_json("versions/third-party-apis.json"))
     check_shared_java_level()
