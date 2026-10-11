@@ -116,6 +116,14 @@ public class ChatBubbleClientListener {
     }
 
     /**
+     * The two login sends, resolved at call time. Kept as package-visible fields
+     * (not direct calls in the hook) so a unit test can drive the gating and
+     * observe BOTH hellos without a live connection.
+     */
+    static Runnable helloV1Sender = com.niuqu.chatbubble.packets.ClientHelloPayload::send;
+    static Runnable helloV2Sender = com.niuqu.chatbubble.packets.GroupProtocolHelloPayload::send;
+
+    /**
      * Sends the group-chat handshake — but only to servers that actually have
      * the channel. NeoForge hard-throws on a serverbound payload the peer never
      * negotiated ({@code NetworkRegistry#checkPacket}: optional registrations
@@ -136,8 +144,12 @@ public class ChatBubbleClientListener {
             ChatBubbleMod.LOGGER.info("[e33chat] Server has no e33chat channel; skipping client hello");
             return;
         }
+        // The v2 offer travels on its own payload ids; a 2.4.x server never
+        // declared them, so the connection keeps the v1 directory and chat wiring.
+        boolean groupsChannelPresent = listener.hasChannel(
+            com.niuqu.chatbubble.packets.GroupProtocolHelloPayload.TYPE.id());
         try {
-            com.niuqu.chatbubble.packets.ClientHelloPayload.send();
+            announce(groupsChannelPresent);
         } catch (RuntimeException e) {
             // The hello is the one send that fires inside the login flow; a
             // failure escaping here costs the rest of handleLogin (see above),
@@ -145,6 +157,19 @@ public class ChatBubbleClientListener {
             // login hand-offs (a59a8686).
             ChatBubbleMod.LOGGER.warn("[e33chat] Client hello failed; continuing without server features", e);
         }
+    }
+
+    /**
+     * Sends the login hellos: the v1 hello always, and the v2 group-protocol offer
+     * only when the peer declared that payload id. The v2 offer is what makes the
+     * server add this player to {@code groupV2Clients} and push the
+     * recipient-scoped directory the group browser needs; without it creating a
+     * group is a silent no-op (the M5 regression this hook had). Extracted so a
+     * real test can pin the gating without a live client.
+     */
+    static void announce(boolean groupsChannelPresent) {
+        com.niuqu.chatbubble.network.LoginHandshake.announce(
+            groupsChannelPresent, helloV1Sender, helloV2Sender);
     }
 
     @SubscribeEvent

@@ -44,6 +44,26 @@ public class ChatBubbleClientSetup implements ClientModInitializer {
         ConfigManager.save(configPath, config);
     }
 
+    /**
+     * The two login sends, resolved at call time. Kept as package-visible fields
+     * (not direct calls in the join hook) so a unit test can drive the real
+     * announce and observe BOTH hellos without a live connection.
+     */
+    static Runnable helloV1Sender = com.niuqu.chatbubble.network.ClientHelloPayload::send;
+    static Runnable helloV2Sender = com.niuqu.chatbubble.network.GroupProtocolHelloPayload::send;
+
+    /**
+     * The login/join announce, shared shape with the Forge and NeoForge hooks so
+     * the three loaders cannot drift: the v1 hello always, and the v2
+     * group-protocol offer only when the peer declared that channel. The v2 offer
+     * is what makes the server push the recipient-scoped directory the group
+     * browser needs; without it, creating a group is a silent no-op.
+     */
+    static void announceOnJoin(boolean groupsChannelPresent) {
+        com.niuqu.chatbubble.network.LoginHandshake.announce(
+            groupsChannelPresent, helloV1Sender, helloV2Sender);
+    }
+
     @Override
     public void onInitializeClient() {
         Path configDir = MinecraftClient.getInstance().runDirectory.toPath().resolve("config/e33chat");
@@ -132,12 +152,10 @@ public class ChatBubbleClientSetup implements ClientModInitializer {
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
             com.niuqu.chatbubble.chat.GroupChannelState.reset();
             com.niuqu.chatbubble.store.ChatMessageStore.clearSeenPlayers();
-            com.niuqu.chatbubble.network.ClientHelloPayload.send();
             // 2.5.0 v2 handshake: real login hook, and only when the server declared
             // the channel — an old server never does, so the v1 flow stays intact.
-            if (ClientPlayNetworking.canSend(com.niuqu.chatbubble.network.GroupProtocolHelloPayload.ID)) {
-                com.niuqu.chatbubble.network.GroupProtocolHelloPayload.send();
-            }
+            announceOnJoin(
+                ClientPlayNetworking.canSend(com.niuqu.chatbubble.network.GroupProtocolHelloPayload.ID));
         });
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             com.niuqu.chatbubble.chat.GroupChannelState.reset();
