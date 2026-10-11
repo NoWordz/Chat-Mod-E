@@ -1,7 +1,10 @@
 package com.niuqu.chatbubble.chat.capture;
 
-import com.niuqu.chatbubble.chat.MessagePresentation;
+import com.niuqu.chatbubble.chat.WhisperCandidate;
+import com.niuqu.chatbubble.chat.WhisperMatch;
+import com.niuqu.chatbubble.chat.WhisperMessageMatcher;
 import com.niuqu.chatbubble.store.ChatMessageStore;
+import java.util.ArrayList;
 import java.util.UUID;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
@@ -11,8 +14,10 @@ import net.minecraft.network.chat.Component;
  * type is stripped): online-player scan first, seen-cache fallback for
  * offline senders. Keyword gate via MessagePresentation.
  *
- * Extracted from ChatListenerMixin during the 2.3.14 restructure; behaviour
- * unchanged.
+ * Extracted from ChatListenerMixin during the 2.3.14 restructure. The 2.5.0
+ * message slice moved the decision into WhisperMessageMatcher: a sender needs
+ * whole-name boundaries plus an explicit recipient, and an ambiguous match is
+ * reported as no match instead of the first plausible candidate.
  */
 public final class WhisperDetector {
     private WhisperDetector() {}
@@ -22,50 +27,34 @@ public final class WhisperDetector {
         var self = Minecraft.getInstance().player;
         if (self == null) return null;
         var connection = self.connection;
+        String ownName = self.getName().getString();
         // G3: 消息嵌 legacy 色码（S§6t§beve）时整条剥 § 再做名字锚点匹配
         String clean = text.replaceAll("§.", "");
+        var candidates = new ArrayList<WhisperCandidate>();
         for (var info : connection.getOnlinePlayers()) {
             String profile = info.getProfile().getName();
             for (String cand : ChatClassifier.nameCandidates(info)) {
-                int idx = clean.indexOf(cand);
-                if (idx >= 0 && idx < 30) {
-                    if (MessagePresentation.hasWhisperKeywordBeforeColon(clean)) {
-                        String content = MessagePresentation.extractWhisperContent(clean, cand);
-                        UUID senderId = info.getProfile().getId();
-                        ChatMessageStore.debugLog(() -> "[e33chat] System(" + logTag + ") | text='" + clean + "' | name=" + cand + " | content='" + content + "'");
-                        return new ChatMessageStore.SenderMeta(
-                            senderId,
-                            Component.literal(cand),
-                            Component.literal(content),
-                            false,
-                            profile,
-                            true, profile
-                        );
-                    }
-                }
+                candidates.add(new WhisperCandidate(info.getProfile().getId(), cand, profile));
             }
         }
         // cache fallback: try seen (offline) players
-        for (var sp : ChatMessageStore.knownNameVariants()) {
-            int idx = clean.indexOf(sp);
-            if (idx >= 0 && idx < 30) {
-                if (MessagePresentation.hasWhisperKeywordBeforeColon(clean)) {
-                    UUID su = ChatMessageStore.findSeenUuid(sp);
-                    if (su != null) {
-                        String content = MessagePresentation.extractWhisperContent(clean, sp);
-                        ChatMessageStore.debugLog(() -> "[e33chat] System(" + logTag + "/cache) | text='" + clean + "' | name=" + sp + " | content='" + content + "'");
-                        return new ChatMessageStore.SenderMeta(
-                            su,
-                            Component.literal(sp),
-                            Component.literal(content),
-                            false,
-                            sp,
-                            true, sp
-                        );
-                    }
-                }
+        for (var seen : ChatMessageStore.seenPlayerSnapshot()) {
+            candidates.add(new WhisperCandidate(seen.uuid(), seen.profileName(), seen.profileName()));
+            if (seen.displayName() != null && !seen.displayName().isEmpty()) {
+                candidates.add(new WhisperCandidate(seen.uuid(), seen.displayName(), seen.profileName()));
             }
         }
-        return null;
+        WhisperMatch match = WhisperMessageMatcher.findIncoming(clean, candidates, ownName);
+        if (match == null) return null;
+        ChatMessageStore.debugLog(() -> "[e33chat] System(" + logTag + ") | text='" + clean
+            + "' | name=" + match.displayName() + " | content='" + match.content() + "'");
+        return new ChatMessageStore.SenderMeta(
+            match.senderId(),
+            Component.literal(match.displayName()),
+            Component.literal(match.content()),
+            false,
+            match.profileName(),
+            true, match.profileName()
+        );
     }
 }

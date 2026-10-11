@@ -152,6 +152,10 @@ public class ChatMessageStore {
         return new ArrayList<>(out);
     }
 
+    public static List<SeenPlayer> seenPlayerSnapshot() {
+        return List.copyOf(seenPlayers.values());
+    }
+
     public static UUID findSeenUuid(String name) {
         if (name == null || name.isEmpty()) return null;
         String stripped = name.replaceAll("§.", "");

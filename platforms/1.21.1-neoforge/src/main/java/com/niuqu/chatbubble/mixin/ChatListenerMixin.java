@@ -357,7 +357,8 @@ public class ChatListenerMixin {
 
         // Layer 3: parse decorated player line — text-level fallback for servers
         // that strip click events from chat messages
-        if (connection != null) {
+        if (connection != null
+                && com.niuqu.chatbubble.chat.WhisperMessageMatcher.mayUseGenericPlayerFallback(text)) {
             SenderMeta parsed = com.niuqu.chatbubble.chat.capture.ChatPipeline.tryParsePlayerLine(message, text, "System");
             if (parsed != null) { ChatMessageStore.setPendingMeta(parsed); return; }
         }
