@@ -25,7 +25,9 @@ import hashlib
 import json
 import pathlib
 import re
+import struct
 import sys
+import zlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 LOADERS = ["Fabric", "NeoForge", "Forge"]
@@ -284,12 +286,16 @@ def check_pinned_equal(pinned: dict) -> None:
     有闸盯着，它们才不会悄悄漂移。哪天消掉一条，就从清单里删掉它。
 
     条目可以是字符串（全部平台互等），也可以是 {"path": ..., "platforms": [...]} ——
-    后者用于 Fabric 有 Yarn 孪生、内容本就不同的文件：只在列出的平台之间要求逐字相同。"""
+    后者用于 Fabric 有 Yarn 孪生、内容本就不同的文件：只在列出的平台之间要求逐字相同。
+
+    单拷贝必须失败（L17）：某个被钉的**测试**文件在某平台整个缺失时，旧实现是 `continue`
+    静默跳过 —— 那份平台就悄悄豁免了。只要该平台工程目录还在，缺件就是红。"""
     items = pinned.get("pinned", [])
     if not items:
         fail("versions/pinned-equal.json 的 pinned 清单是空的 —— 要么这条制度废了，要么布局变了")
         return
     all_platforms = sorted(p.name for p in (ROOT / "platforms").iterdir() if p.is_dir())
+    seen_items = set()
     for item in items:
         if isinstance(item, str):
             rel, scope = item, None
@@ -301,15 +307,30 @@ def check_pinned_equal(pinned: dict) -> None:
         else:
             fail(f"钉等清单有条目既不是字符串也不是 {{path, platforms}} 对象：{item!r}")
             continue
+        key = (rel, tuple(scope) if scope is not None else None)
+        if key in seen_items:
+            fail(f"钉等清单里的 {rel}{'（限定平台：' + ', '.join(scope) + '）' if scope else ''} 重复出现 —— "
+                 f"同一条被钉两次，说明清单腐坏了")
+            continue
+        seen_items.add(key)
         platforms = [p for p in (scope if scope is not None else all_platforms) if p in all_platforms]
+        if len(platforms) < 2:
+            fail(f"钉等清单里的 {rel} 只落在 {len(platforms)} 个平台 —— 少于两份就没有「漂移」可言，"
+                 f"这条应该从清单删掉，而不是留一条永远绿的")
+            continue
         copies = {p: ROOT / "platforms" / p / rel for p in platforms if (ROOT / "platforms" / p / rel).is_file()}
+        scope_note = "" if scope is None else "（限定平台：" + ", ".join(scope) + "）"
+        # 列出的平台只要工程目录还在，就必须有一份 —— 缺了一份是红，不是静默跳过（L17）
+        for p in platforms:
+            if (ROOT / "platforms" / p).is_dir() and p not in copies:
+                fail(f"钉等清单里的 {rel}{scope_note} 在目标 {p} 上不存在 —— "
+                     f"被钉的文件缺了一份，那份平台就悄悄豁免了；要么补齐，要么从清单删掉")
         if len(copies) < 2:
-            continue  # 只剩一份就没有「漂移」可言（可能是清理到一半，等下一波收编）
+            continue  # 缺件已在上面报红，这里不再叠报
         digests = {p: digest(f) for p, f in copies.items()}
         distinct = {v for v in digests.values()}
         if len(distinct) > 1:
             where = ", ".join(sorted(digests))
-            scope_note = "" if scope is None else "（限定平台：" + ", ".join(scope) + "）"
             fail(f"钉等清单里的 {rel}{scope_note} 在各平台内容不一致（{where}）—— "
                  f"要么把改动同步到每一份，要么把它收编进 shared//映射层然后从清单删掉")
 
@@ -373,6 +394,421 @@ def check_resource_paths(paths: dict) -> None:
         for extra in sorted(actual - expected):
             fail(f"目标 {name} 多出未声明的资源 {extra} —— 写进 versions/resource-paths.json，"
                  f"或删掉它（多出来的资源不会被加载，只会让人以为生效了）")
+
+
+# ---------------------------------------------------------------------------
+# PNG decoding (stdlib only) — the texture checks compare DECODED PIXELS, not the
+# encoded PNG bytes. Re-encoding with identical pixels must read equal; any pixel
+# change must read different. See M14/L15 in _e33_250/audit/E33CHAT-250-AUDIT.md.
+# ---------------------------------------------------------------------------
+
+PNG_SIG = b"\x89PNG\r\n\x1a\n"
+
+
+def decode_png(path: pathlib.Path):
+    """Decode a PNG to (width, height, RGBA bytes). Supports the 8-bit RGBA files this
+    repo ships; returns None on any unsupported/corrupt file so the caller turns that
+    into a red rather than crashing the whole guard."""
+    try:
+        b = path.read_bytes()
+    except OSError:
+        return None
+    if b[:8] != PNG_SIG:
+        return None
+    pos, idat = 8, b""
+    w = h = bit_depth = color_type = interlace = None
+    while pos + 12 <= len(b):
+        (ln,) = struct.unpack(">I", b[pos:pos + 4])
+        typ = b[pos + 4:pos + 8]
+        data = b[pos + 8:pos + 8 + ln]
+        pos += 12 + ln
+        if typ == b"IHDR":
+            w, h, bit_depth, color_type, _comp, _filt, interlace = struct.unpack(">IIBBBBB", data)
+        elif typ == b"IDAT":
+            idat += data
+        elif typ == b"IEND":
+            break
+    if None in (w, h) or bit_depth != 8 or color_type != 6 or interlace != 0:
+        return None
+    try:
+        raw = zlib.decompress(idat)
+    except zlib.error:
+        return None
+    stride = w * 4
+    if len(raw) != (stride + 1) * h:
+        return None
+    out = bytearray()
+    prev = bytearray(stride)
+    i = 0
+    for _ in range(h):
+        f = raw[i]
+        i += 1
+        line = bytearray(raw[i:i + stride])
+        i += stride
+        if f == 1:
+            for x in range(4, stride):
+                line[x] = (line[x] + line[x - 4]) & 255
+        elif f == 2:
+            for x in range(stride):
+                line[x] = (line[x] + prev[x]) & 255
+        elif f == 3:
+            for x in range(stride):
+                left = line[x - 4] if x >= 4 else 0
+                line[x] = (line[x] + ((left + prev[x]) >> 1)) & 255
+        elif f == 4:
+            for x in range(stride):
+                a = line[x - 4] if x >= 4 else 0
+                c = prev[x - 4] if x >= 4 else 0
+                p = a + prev[x] - c
+                pa, pb, pc = abs(p - a), abs(p - prev[x]), abs(p - c)
+                pr = a if (pa <= pb and pa <= pc) else (prev[x] if pb <= pc else c)
+                line[x] = (line[x] + pr) & 255
+        elif f != 0:
+            return None
+        out += line
+        prev = line
+    return w, h, bytes(out)
+
+
+def png_pixel_sha(path: pathlib.Path):
+    """sha1 of the decoded pixels (dimensions + RGBA), or None when undecodable."""
+    decoded = decode_png(path)
+    if decoded is None:
+        return None
+    w, h, rgba = decoded
+    return hashlib.sha1(f"{w}x{h}:".encode() + rgba).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Texture reference scanning + derived hover pairs
+# ---------------------------------------------------------------------------
+
+TEXTURE_SRC_GLOBS = ("shared/src", "layers", "platforms/*/src/main/java")
+UI_ELEMENT_CONST_RE = re.compile(r'[A-Z][A-Z0-9_]*\("([a-z0-9_]+)"\)')
+UI_ELEMENT_ENUM_RE = re.compile(r"enum\s+UiElement\s*\{(.*?);", re.S)
+ICON_TEX_RE = re.compile(r"iconTex\s*\(")
+STR_LITERAL_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+UI_ELEMENT_REF_RE = re.compile(r"UiElement\.([A-Z][A-Z0-9_]*)")
+TERNARY_HOVER_RE = re.compile(
+    r'\?\s*[^?:]*?UiElement\.([A-Z][A-Z0-9_]*)[^?:]*?:\s*[^?:]*?UiElement\.([A-Z][A-Z0-9_]*)')
+
+
+def _enum_constant_to_path(text: str) -> dict:
+    m = UI_ELEMENT_ENUM_RE.search(text)
+    return dict(re.findall(r'([A-Z][A-Z0-9_]*)\("([a-z0-9_]+)"\)', m.group(1))) if m else {}
+
+
+def _ui_element_names(path: pathlib.Path) -> set:
+    """UiElement enum constant区里的 "path" 字面量。解析出 0 个就是红 —— 枚举体改了形状，
+    被引用纹理集合会静默缩小，界面图标静默空白。"""
+    if not path.is_file():
+        fail(f"{path.relative_to(ROOT).as_posix()} 不存在 —— 纹理名没有来源")
+        return set()
+    text = path.read_text(encoding="utf-8", errors="replace")
+    m = UI_ELEMENT_ENUM_RE.search(text)
+    if not m:
+        fail(f"{path.relative_to(ROOT).as_posix()} 里找不到 enum UiElement 的常量区")
+        return set()
+    names = set(UI_ELEMENT_CONST_RE.findall(m.group(1)))
+    if not names:
+        fail(f"{path.relative_to(ROOT).as_posix()} 的 enum UiElement 里一个 \"path\" 字面量都没解析到 —— "
+             f"枚举体改了形状，纹理名集合会静默缩小")
+    return names
+
+
+def _brace_end(text: str, open_idx: int) -> int:
+    """Index of the ')' matching the '(' at open_idx, or -1."""
+    depth = 0
+    for i in range(open_idx, len(text)):
+        ch = text[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
+def _icon_tex_names(platform: str) -> set:
+    """Literals passed to iconTex(...) on this platform. Parentheses are matched so a
+    refactor to a variable argument (iconTex(name)) is visible: zero literals scanned
+    is a red, not a silently empty expected set."""
+    out = set()
+    hits = 0
+    root = ROOT / "platforms" / platform / "src/main/java"
+    for f in root.rglob("*.java") if root.is_dir() else []:
+        text = f.read_text(encoding="utf-8", errors="replace")
+        for m in ICON_TEX_RE.finditer(text):
+            hits += 1
+            end = _brace_end(text, m.end() - 1)
+            if end < 0:
+                continue
+            for s in STR_LITERAL_RE.findall(text[m.end():end]):
+                inner = s[1:-1]
+                if re.fullmatch(r"[a-z0-9_]+", inner):
+                    out.add(inner)
+    if hits == 0:
+        fail(f"目标 {platform}: 一个 iconTex(...) 调用都没扫到 —— 匹配式坏了或布局变了")
+    elif not out:
+        fail(f"目标 {platform}: 扫到 {hits} 个 iconTex(...) 却没有任何字符串字面量 —— "
+             f"调用可能重构成传变量，纹理名集合会静默缩小")
+    return out
+
+
+def _texture_source_texts():
+    for g in TEXTURE_SRC_GLOBS:
+        for f in ROOT.glob(g):
+            it = f.rglob("*.java") if f.is_dir() else [f]
+            for j in it:
+                if "/test/" in j.as_posix():
+                    continue
+                yield j.read_text(encoding="utf-8", errors="replace")
+
+
+def contrast_pairs() -> set:
+    """(resting_name, hover_name) pairs the renderers actually draw, derived from call
+    sites instead of hardcoded:
+
+      * a `cond ? X : Y` ternary that draws a `*_hover` UiElement (resting -> hover);
+      * the `_bg`/`_hover` naming pair, gated on both constants being referenced.
+
+    The audit (M13) found the old hardcoded list checked the wrong pairs, so
+    `sidebar_bg -> sidebar_hover` (every sidebar row's resting fill) went unguarded."""
+    paths = {}
+    for p in sorted(ROOT.glob("platforms/*/src/main/java/com/niuqu/chatbubble/texture/UiElement.java")):
+        paths.update(_enum_constant_to_path(p.read_text(encoding="utf-8", errors="replace")))
+    refs = set()
+    pairs = set()
+    for text in _texture_source_texts():
+        refs.update(UI_ELEMENT_REF_RE.findall(text))
+        for a, b in TERNARY_HOVER_RE.findall(text):
+            if a not in paths or b not in paths:
+                continue
+            pa, pb = paths[a], paths[b]
+            if pa.endswith("_hover") and not pb.endswith("_hover"):
+                pairs.add((pb, pa))   # cond ? HOVER : resting
+            elif pb.endswith("_hover") and not pa.endswith("_hover"):
+                pairs.add((pa, pb))   # cond ? resting : HOVER
+    for name, path in paths.items():
+        if path.endswith("_hover"):
+            resting = path[:-len("_hover")] + "_bg"
+            resting_const = next((n for n, q in paths.items() if q == resting), None)
+            if resting_const and resting_const in refs and name in refs:
+                pairs.add((resting, path))
+    return pairs
+
+
+REQUIRED_CONTRAST_PAIRS = {
+    ("sidebar_bg", "sidebar_hover"),
+    ("sidebar_selected", "context_hover"),
+    ("sidebar_selected", "close_hover"),
+}
+
+
+def check_ui_textures(targets: dict) -> None:
+    """每个目标：被引用的纹理名（UiElement 常量区 ∪ iconTex 字面量）在每个主题目录下都必须
+    有 PNG；三端纹理集合逐名相同且**逐像素**相同；悬停态与其静止态**逐像素**必须可区分。
+
+    这类缺陷的现场表现都是静默的：图标空白、三端分叉、hover 不可见。都靠解码像素判，
+    不靠 PNG 字节（重编码即可绕过字节比较）。"""
+    pairs = contrast_pairs()
+    absent = REQUIRED_CONTRAST_PAIRS - pairs
+    if absent:
+        fail(f"悬停对比对子没有从调用点推导出来：{sorted(absent)} —— "
+             f"要么渲染器改了绘制方式，要么推导逻辑坏了（禁止靠硬编码凑齐）")
+
+    per_platform = {}   # platform -> theme -> set(names)
+    pixel_sha = {}      # platform -> theme -> {name: pixel sha}
+    for name in sorted(targets):
+        t = targets[name]
+        project = t.get("project") if isinstance(t, dict) else None
+        if not project or not (ROOT / project).is_dir():
+            continue  # 声明了但还没有工程的目标：没有资源可比
+        gui = ROOT / "platforms" / name / "src" / "main" / "resources" / "assets" / "e33chat" / "textures" / "gui"
+        if not gui.is_dir():
+            fail(f"目标 {name} 没有 assets/e33chat/textures/gui —— 面板/侧栏纹理全没了")
+            continue
+        themes = sorted(p.name for p in gui.iterdir() if p.is_dir())
+        if not themes:
+            fail(f"目标 {name} 的 textures/gui 里没有主题目录")
+            continue
+        expected = _ui_element_names(
+            ROOT / "platforms" / name / "src" / "main" / "java" / "com" / "niuqu"
+            / "chatbubble" / "texture" / "UiElement.java")
+        expected |= _icon_tex_names(name)
+        if not expected:
+            fail(f"目标 {name}: 被引用纹理名集合是空的 —— 扫描全废，这条检查会变成什么都不查")
+            continue
+        actual, sha = {}, {}
+        for theme in themes:
+            files = sorted((gui / theme).glob("*.png"))
+            if not files:
+                fail(f"目标 {name} 主题目录 {theme} 里一个 PNG 都没有")
+            actual[theme] = {p.name[:-4] for p in files}
+            sha[theme] = {}
+            for p in files:
+                d = png_pixel_sha(p)
+                if d is None:
+                    fail(f"{p.relative_to(ROOT).as_posix()} 解不开（非 8-bit RGBA / 损坏）—— "
+                         f"纹理内容无法核对")
+                sha[theme][p.name[:-4]] = d
+            for missing in sorted(expected - actual[theme]):
+                fail(f"目标 {name} 主题 {theme} 缺纹理 {missing}.png —— 引用了却没有文件，界面会静默空白")
+        per_platform[name] = actual
+        pixel_sha[name] = sha
+
+    # hover vs resting: decoded pixels must differ
+    for name, themes in sorted(pixel_sha.items()):
+        for theme, files in themes.items():
+            for resting, hover in sorted(pairs):
+                if resting in files and hover in files and files[resting] == files[hover]:
+                    fail(f"目标 {name} 主题 {theme}：{hover}.png 与 {resting}.png 解码后逐像素相同 —— "
+                         f"hover 与静止态不可区分，等于没有 hover")
+
+    # cross-platform: same names, same pixels
+    names = sorted(per_platform)
+    if len(names) < 2:
+        fail(f"只有 {len(names)} 个在建目标参与纹理比对 —— 三端一致性无从检查")
+        return
+    themes_union = {}
+    for name in names:
+        for theme, nms in per_platform[name].items():
+            themes_union.setdefault(theme, set()).update(nms)
+    for theme, want in sorted(themes_union.items()):
+        for nm in sorted(want):
+            holders = [n for n in names if nm in per_platform[n].get(theme, set())]
+            if len(holders) < len(names):
+                missing = sorted(set(names) - set(holders))
+                fail(f"主题 {theme} 的纹理 {nm}.png 缺在 {missing}（{holders[0]} 有）—— "
+                     f"某个目标整体缺一个图标，按文件名集合比对会自我豁免")
+                continue
+            shas = {n: pixel_sha[n][theme][nm] for n in names}
+            if len(set(shas.values())) > 1:
+                fail(f"主题 {theme} 的纹理 {nm}.png 在各目标解码后内容不同（{', '.join(sorted(shas))}）—— "
+                     f"三端会渲染出不同的图标")
+
+
+# ---------------------------------------------------------------------------
+# Language table checks
+# ---------------------------------------------------------------------------
+
+# Fabric-only keys: its config screen renders a richer tooltip than Forge/Neo. This is a
+# real, narrow difference, not drift. Values are still compared on every shared key.
+LANG_FABRIC_ONLY_KEYS = {"e33chat.config.receive_images.tooltip"}
+LANG_FABRIC = "1.21.1-fabric"
+
+
+def check_lang_keys(targets: dict) -> None:
+    """语言表：同目标 en/zh 必须同键，跨目标也必须同键，且**同键必须同值**（只比键集合会漏掉
+    「翻译被换成英文/空白」与「键被三端同时删掉」）。Fabric 独有的键单列豁免，但仍要求非空。"""
+    per_platform = {}  # platform -> locale -> {key: value}
+    for name in sorted(targets):
+        t = targets[name]
+        project = t.get("project") if isinstance(t, dict) else None
+        if not project or not (ROOT / project).is_dir():
+            continue
+        root = ROOT / "platforms" / name / "src" / "main" / "resources" / "assets" / "e33chat" / "lang"
+        if not root.is_dir():
+            fail(f"目标 {name} 没有 assets/e33chat/lang")
+            continue
+        tables = {}
+        for f in sorted(root.glob("*.json")):
+            try:
+                tables[f.stem] = json.loads(f.read_text(encoding="utf-8", errors="replace"))
+            except ValueError as e:
+                fail(f"{f.relative_to(ROOT).as_posix()} 不是合法 JSON：{e}")
+        if len(tables) < 2:
+            fail(f"目标 {name} 的语言表少于两份（{sorted(tables)}）")
+        for locale, kv in tables.items():
+            for key, val in kv.items():
+                if not isinstance(val, str) or not val.strip():
+                    fail(f"目标 {name} 的 {locale}.json 键 {key} 是空值 —— 界面上会什么都不显示")
+        union = set().union(*[set(kv) for kv in tables.values()]) if tables else set()
+        for locale, kv in tables.items():
+            for missing in sorted(union - set(kv)):
+                fail(f"目标 {name} 的 {locale}.json 缺键 {missing}")
+        per_platform[name] = tables
+
+    names = sorted(per_platform)
+    if len(names) < 2:
+        fail(f"只有 {len(names)} 个在建目标有语言表 —— 三端一致性无从检查")
+        return
+    locales = sorted(set().union(*[set(t) for t in per_platform.values()]))
+    for locale in locales:
+        get = {n: per_platform[n].get(locale, {}) for n in names}
+        all_keys = set().union(*[set(v) for v in get.values()])
+        for key in sorted(all_keys):
+            holders = [n for n in names if key in get[n]]
+            if len(holders) < len(names):
+                if key in LANG_FABRIC_ONLY_KEYS and set(holders) == {LANG_FABRIC}:
+                    continue
+                missing = sorted(set(names) - set(holders))
+                fail(f"{locale}.json 的键 {key} 缺在 {missing} —— 这些目标上界面会回退成原始键名")
+                continue
+            values = {n: get[n][key] for n in names}
+            if len(set(values.values())) > 1:
+                fail(f"{locale}.json 的键 {key} 三端取值不同："
+                     f"{ {n: values[n] for n in names} } —— 同一句界面文案三端不一致")
+
+
+# ---------------------------------------------------------------------------
+# Zero-MC guard for the shared logic layer
+# ---------------------------------------------------------------------------
+
+LOGIC_DIR = "shared/src/main/java/com/niuqu/chatbubble/logic"
+# Markers that must not appear in a pure-logic file. Line comments / block comments /
+# string literals are stripped first, so a doc mention of a class name is fine.
+MC_IMPORT_RE = re.compile(r"^\s*import\s+(static\s+)?(net\.minecraft|com\.mojang|net\.neoforged|net\.minecraftforge|net\.fabricmc)\b", re.M)
+MC_QUALIFIED_RE = re.compile(r"\b(?:net\.minecraft|com\.mojang)\.[A-Za-z_]")
+
+
+def _strip_literals_and_comments(text: str) -> str:
+    """Remove // and /* */ comments and "..." / '...' string/char literals."""
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if c == "/" and nxt == "/":
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+        elif c == "/" and nxt == "*":
+            j = text.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+        elif c == '"' or c == "'":
+            q = c
+            i += 1
+            while i < n and text[i] != q:
+                if text[i] == "\\":
+                    i += 1
+                i += 1
+            i += 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def check_shared_logic_zero_mc() -> None:
+    """`shared/logic/` 是纯逻辑层：一个 net.minecraft / 平台 API 的符号都不许有。
+    守卫按该路径卡（§13 D1），不靠编译器 —— 共享目录其余部分允许 MC（如共用 mixin）。
+    扫不到任何文件也要红：路径漂移会让这条检查悄悄变成什么都不查。"""
+    base = ROOT / LOGIC_DIR
+    files = sorted(base.rglob("*.java")) if base.is_dir() else []
+    if not files:
+        fail(f"{LOGIC_DIR} 下没有 .java —— 纯逻辑层的路径漂移了？零-MC 守卫扫了个空")
+        return
+    for f in files:
+        text = _strip_literals_and_comments(f.read_text(encoding="utf-8", errors="replace"))
+        for m in MC_IMPORT_RE.finditer(text):
+            line = text[:m.start()].count("\n") + 1
+            fail(f"{f.relative_to(ROOT).as_posix()}:{line} import 了 MC/平台 API —— "
+                 f"shared/logic/ 必须是纯 Java（§13 D1；这些类型进不了纯逻辑单测）")
+        for m in MC_QUALIFIED_RE.finditer(text):
+            line = text[:m.start()].count("\n") + 1
+            fail(f"{f.relative_to(ROOT).as_posix()}:{line} 直接引用了 MC 类型 —— "
+                 f"shared/logic/ 必须零 net.minecraft import")
 
 
 def _strip_comments(text):
@@ -622,6 +1058,9 @@ def main() -> int:
     check_layers(layers)
     check_aliases(aliases)
     check_resource_paths(paths_raw)
+    check_ui_textures(targets)
+    check_lang_keys(targets)
+    check_shared_logic_zero_mc()
     check_shared_dependencies(load_json("versions/third-party-apis.json"))
     check_shared_java_level()
     check_server_side(server_raw)
