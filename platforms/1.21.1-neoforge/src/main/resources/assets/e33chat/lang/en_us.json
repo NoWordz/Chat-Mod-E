@@ -295,6 +295,8 @@
   "e33chat.group.member_hint": "Owner only",
   "e33chat.group.name_placeholder": "Type a name…",
   "e33chat.group.confirm_btn": "Confirm",
+  "e33chat.group.rename_placeholder": "Type a new name…",
+  "e33chat.group.check_btn": "Apply",
   "e33chat.group.back_btn": "Back",
   "e33chat.group.create_placeholder": "Type a name to create…",
   "e33chat.group.create_btn": "Create",
