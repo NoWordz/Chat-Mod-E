@@ -232,10 +232,10 @@ public class ChatBubbleScreen extends ChatScreen {
     // come back through the callbacks below)
     private final com.niuqu.chatbubble.image.UploadQueue uploadQueue =
         new com.niuqu.chatbubble.image.UploadQueue(new com.niuqu.chatbubble.image.UploadQueue.Callbacks() {
-            @Override public void onBusyStart() { uploadBusyTicks = 60; }
-            @Override public void onIdle() { uploadBusyTicks = 0; }
-            @Override public void onFailure() { uploadBusyTicks = 0; uploadToastTicks = 60; }
-            @Override public void onRejected(com.niuqu.chatbubble.image.AnimatedImageLoader.OverBudget reason) {
+            @Override public void onBusyStart(java.util.UUID groupId) { uploadBusyTicks = 60; }
+            @Override public void onIdle(java.util.UUID groupId) { uploadBusyTicks = 0; }
+            @Override public void onFailure(java.util.UUID groupId) { uploadBusyTicks = 0; uploadToastTicks = 60; }
+            @Override public void onRejected(java.util.UUID groupId, com.niuqu.chatbubble.image.AnimatedImageLoader.OverBudget reason) {
                 uploadBusyTicks = 0;
                 showToast(switch (reason) {
                     case TOO_MANY_FRAMES -> "e33chat.toast.anim_frames";
@@ -243,9 +243,16 @@ public class ChatBubbleScreen extends ChatScreen {
                     case TOO_LARGE_BYTES -> "e33chat.toast.anim_bytes";
                 });
             }
-            @Override public void onEmoteSent(String url) { sendMessageText(url); }
-            @Override public void onSendText(String text) { sendMessageText(text); }
-            @Override public void onInputImage(String code) {
+            @Override public void onEmoteSent(java.util.UUID groupId, String url) {
+                if (conversationActive(groupId)) sendMessageText(url);
+            }
+            @Override public void onSendText(java.util.UUID groupId, String text) {
+                if (conversationActive(groupId)) sendMessageText(text);
+            }
+            @Override public void onInputImage(java.util.UUID groupId, String code) {
+                // The result belongs to the conversation the upload was composed in;
+                // if the tab changed meanwhile, never type it into another channel.
+                if (!conversationActive(groupId)) return;
                 String cur = input.getValue();
                 if (cur.contains("[[CICode,url=file://")) {
                     // Replace the local file:// CICode (chatimage drag/paste) with
@@ -257,8 +264,21 @@ public class ChatBubbleScreen extends ChatScreen {
                 input.setValue(cur);
                 input.setCursorPosition(input.getValue().length());
             }
-            @Override public void onRestoreInput(String text) { input.setValue(text); }
+            @Override public void onRestoreInput(java.util.UUID groupId, String text) {
+                if (conversationActive(groupId)) input.setValue(text);
+            }
         });
+
+    /** True when the callback's captured group is still the one being composed in. */
+    private boolean conversationActive(java.util.UUID groupId) {
+        if (groupId == null) return true;
+        return groupId.equals(com.niuqu.chatbubble.chat.GroupChannelState.activeGroupId());
+    }
+
+    /** The group an upload started now belongs to (null for public/DM). */
+    private static java.util.UUID composedGroupId() {
+        return com.niuqu.chatbubble.chat.GroupChannelState.activeGroupId();
+    }
 
 
 
@@ -1210,7 +1230,7 @@ public class ChatBubbleScreen extends ChatScreen {
                         java.io.File f = new java.io.File(emojiText.substring(7));
                         if (f.isFile()) {
                             beginPopupClose(s -> emojiCloseStart = s, () -> emojiPanel.visible = false);
-                            uploadQueue.enqueue(new com.niuqu.chatbubble.image.UploadQueue.UploadJob(f, null, null, true, null));
+                            uploadQueue.enqueue(new com.niuqu.chatbubble.image.UploadQueue.UploadJob(f, null, null, true, null, composedGroupId()));
                         }
                     } else if (emojiText.startsWith("@EMOTE_DEL:")) {
                         java.io.File f = new java.io.File(emojiText.substring(11));
@@ -1606,7 +1626,7 @@ public class ChatBubbleScreen extends ChatScreen {
             String l = p.getFileName().toString().toLowerCase();
             if (l.endsWith(".png") || l.endsWith(".jpg") || l.endsWith(".jpeg")
                     || l.endsWith(".gif") || l.endsWith(".bmp")) {
-                uploadQueue.enqueue(new com.niuqu.chatbubble.image.UploadQueue.UploadJob(p.toFile(), null, null, false, null));
+                uploadQueue.enqueue(new com.niuqu.chatbubble.image.UploadQueue.UploadJob(p.toFile(), null, null, false, null, composedGroupId()));
                 // The OS drop can steal window focus; give it back to the chat input
                 // so typing keeps working right after a drag.
                 Minecraft.getInstance().execute(() -> setFocused(input));
@@ -1627,7 +1647,7 @@ public class ChatBubbleScreen extends ChatScreen {
         com.niuqu.chatbubble.image.ImageLoader.executor().execute(() -> {
             LocalImageSource.PreparedImage prep = readClipboard();
             if (prep == null) return; // no image in clipboard — let vanilla paste text
-            minecraft.execute(() -> uploadQueue.enqueue(new com.niuqu.chatbubble.image.UploadQueue.UploadJob(null, prep.bytes(), "clipboard", false, null)));
+            minecraft.execute(() -> uploadQueue.enqueue(new com.niuqu.chatbubble.image.UploadQueue.UploadJob(null, prep.bytes(), "clipboard", false, null, composedGroupId())));
         });
     }
 
@@ -2922,7 +2942,7 @@ public class ChatBubbleScreen extends ChatScreen {
                 sendMessageText(raw);
                 return;
             }
-            if (uploadQueue.enqueue(new com.niuqu.chatbubble.image.UploadQueue.UploadJob(new java.io.File(localPath), null, null, false, raw))) {
+            if (uploadQueue.enqueue(new com.niuqu.chatbubble.image.UploadQueue.UploadJob(new java.io.File(localPath), null, null, false, raw, composedGroupId()))) {
                 input.setValue("");
                 savedInput = "";
                 Minecraft.getInstance().player.sendSystemMessage(Component.translatable("e33chat.upload.wait"));

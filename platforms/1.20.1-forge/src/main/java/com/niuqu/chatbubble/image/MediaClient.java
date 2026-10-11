@@ -2,6 +2,8 @@ package com.niuqu.chatbubble.image;
 
 import com.mojang.logging.LogUtils;
 import com.niuqu.chatbubble.network.NetworkHandler;
+import com.niuqu.chatbubble.packets.GroupMediaContextPacket;
+import com.niuqu.chatbubble.packets.GroupMediaUploadPacket;
 import com.niuqu.chatbubble.packets.MediaCapPacket;
 import com.niuqu.chatbubble.packets.MediaRequestPacket;
 import com.niuqu.chatbubble.packets.MediaResponsePacket;
@@ -259,6 +261,44 @@ public final class MediaClient {
         } catch (Exception e) {
             UPLOADS.remove(uploadId);
             LOGGER.info("[e33chat] server media upload timed out after {}s", TIMEOUT_SECONDS);
+            return null;
+        }
+    }
+
+    /**
+     * Upload bytes to the server as group-owned media. Worker-thread only
+     * (blocking, like {@link #upload}). Returns the {@code e33chat://media/<id>}
+     * URL, where {@code <id>} is the private {@code g_} id the server stored, or
+     * null on any failure.
+     *
+     * <p>The group context (groupId + uploadId) is sent immediately before the
+     * first chunk so the server can authorize the real connection and bind the
+     * bytes to the group UUID: the file then reads only through that group's
+     * rules. There is deliberately no third-party fallback here — a group image
+     * must never be rehosted as a public link (2.5.0 M9 / §13 D6).
+     */
+    public static String uploadGroup(UUID groupId, byte[] bytes, String contentType) {
+        if (!serverEnabled || groupId == null || bytes == null || bytes.length == 0) return null;
+        long uploadId = UUID.randomUUID().getMostSignificantBits() & Long.MAX_VALUE;
+        int totalChunks = DiskMediaStore.totalChunksFor(bytes.length);
+        CompletableFuture<String> done = new CompletableFuture<>();
+        UPLOADS.put(uploadId, done);
+        NetworkHandler.GROUPS_CHANNEL.sendToServer(new GroupMediaContextPacket(groupId, uploadId));
+        for (int i = 0; i < totalChunks; i++) {
+            int from = i * DiskMediaStore.CHUNK_BYTES;
+            int len = Math.min(DiskMediaStore.CHUNK_BYTES, bytes.length - from);
+            byte[] chunk = new byte[len];
+            System.arraycopy(bytes, from, chunk, 0, len);
+            NetworkHandler.GROUPS_CHANNEL.sendToServer(new GroupMediaUploadPacket(uploadId, i, totalChunks,
+                bytes.length, contentType, chunk));
+        }
+        try {
+            String mediaId = done.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            if (mediaId != null) rememberOwnUpload(mediaId, bytes);
+            return mediaId != null ? "e33chat://media/" + mediaId : null;
+        } catch (Exception e) {
+            UPLOADS.remove(uploadId);
+            LOGGER.info("[e33chat] group media upload timed out after {}s", TIMEOUT_SECONDS);
             return null;
         }
     }
