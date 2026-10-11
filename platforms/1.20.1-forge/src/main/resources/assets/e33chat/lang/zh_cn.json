@@ -299,6 +299,7 @@
   "e33chat.group.already_in": "你已经在群组 [%s] 中",
   "e33chat.group.cooldown": "发言太快，稍候再试",
   "e33chat.group.save_failed": "群组数据保存失败，请检查服务器磁盘",
+  "e33chat.group.media_denied": "该图片不属于本群组",
   "e33chat.group.empty": "消息不能为空",
   "e33chat.group.list_header": "群组列表（共 %s 个）：",
   "e33chat.group.list_empty": "服务器还没有群组，用 /e33chat group create <名称> 创建第一个",

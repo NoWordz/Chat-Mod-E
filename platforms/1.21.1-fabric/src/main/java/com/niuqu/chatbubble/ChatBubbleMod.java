@@ -16,6 +16,8 @@ import com.niuqu.chatbubble.network.GroupDirectoryPayload;
 import com.niuqu.chatbubble.network.GroupHistoryPagePayload;
 import com.niuqu.chatbubble.network.GroupHistoryRequestPayload;
 import com.niuqu.chatbubble.network.GroupListPayload;
+import com.niuqu.chatbubble.network.GroupMediaContextPayload;
+import com.niuqu.chatbubble.network.GroupMediaUploadPayload;
 import com.niuqu.chatbubble.network.GroupProtocolAckPayload;
 import com.niuqu.chatbubble.network.GroupProtocolHelloPayload;
 import com.niuqu.chatbubble.network.HistoryPayload;
@@ -85,8 +87,10 @@ public class ChatBubbleMod implements ModInitializer {
     private static boolean configLoaded;
     private static volatile com.niuqu.chatbubble.server.DiskMediaStore mediaStore;
 
-    /** Lazily-created per-world media store (next to the server config). */
-    private static com.niuqu.chatbubble.server.DiskMediaStore mediaStore(net.minecraft.server.MinecraftServer server) {
+    /** Lazily-created per-world media store (next to the server config). Public so
+     *  the 2.5.0 M9 group-media seams (payload handlers, GroupManager) can reach
+     *  the same store the public upload path uses. */
+    public static com.niuqu.chatbubble.server.DiskMediaStore mediaStore(net.minecraft.server.MinecraftServer server) {
         com.niuqu.chatbubble.server.DiskMediaStore s = mediaStore;
         if (s == null) {
             synchronized (ChatBubbleMod.class) {
@@ -156,6 +160,10 @@ public class ChatBubbleMod implements ModInitializer {
         PayloadTypeRegistry.playS2C().register(GroupHistoryPagePayload.ID, GroupHistoryPagePayload.CODEC);
         PayloadTypeRegistry.playC2S().register(GroupActionV2Payload.ID, GroupActionV2Payload.CODEC);
         PayloadTypeRegistry.playS2C().register(GroupDirectoryChunkPayload.ID, GroupDirectoryChunkPayload.CODEC);
+        // 2.5.0 M9 group media: the per-upload group scope plus the group-scoped
+        // upload path, so group images are stored as g_ bytes bound to the group UUID.
+        PayloadTypeRegistry.playC2S().register(GroupMediaContextPayload.ID, GroupMediaContextPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(GroupMediaUploadPayload.ID, GroupMediaUploadPayload.CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(MediaUploadPayload.ID, (payload, context) -> {
             ServerPlayerEntity player = context.player();
@@ -208,6 +216,17 @@ public class ChatBubbleMod implements ModInitializer {
         ServerPlayNetworking.registerGlobalReceiver(GroupHistoryRequestPayload.ID, (payload, context) -> {
             ServerPlayerEntity player = context.player();
             context.server().execute(() -> GroupHistoryRequestPayload.handleServer(payload, player));
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(GroupMediaContextPayload.ID, (payload, context) -> {
+            ServerPlayerEntity player = context.player();
+            context.server().execute(() -> GroupMediaContextPayload.handleServer(payload, player));
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(GroupMediaUploadPayload.ID, (payload, context) -> {
+            ServerPlayerEntity player = context.player();
+            context.server().execute(() -> GroupMediaUploadPayload.handleServer(
+                payload, player, mediaEnabled, mediaAutoClean));
         });
 
         // Server-config GUI save: validate, persist to JSON, rebroadcast
