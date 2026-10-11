@@ -140,7 +140,8 @@ class BracketCodecTest {
     @Test
     void usableUrlChecks() {
         assertTrue(ImageLoader.isUsableUrl("https://a.com/x.png"));
-        assertTrue(ImageLoader.isUsableUrl("http://localhost:8080/x.png"));
+        assertFalse(ImageLoader.isUsableUrl("http://localhost:8080/x.png")); // SSRF guard
+        assertFalse(ImageLoader.isUsableUrl("http://127.0.0.1/x.png"));      // SSRF guard
         assertFalse(ImageLoader.isUsableUrl(null));
         assertFalse(ImageLoader.isUsableUrl(""));
         assertFalse(ImageLoader.isUsableUrl("ftp://a.com/x.png"));

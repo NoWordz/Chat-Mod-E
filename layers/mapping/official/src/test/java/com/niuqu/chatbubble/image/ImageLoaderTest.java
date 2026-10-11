@@ -56,11 +56,26 @@ class ImageLoaderTest {
     @Test
     void usableUrlChecks() {
         assertTrue(ImageLoader.isUsableUrl("https://a.com/x.png"));
-        assertTrue(ImageLoader.isUsableUrl("http://localhost:8080/x.png"));
+        assertFalse(ImageLoader.isUsableUrl("http://localhost:8080/x.png")); // SSRF guard
+        assertFalse(ImageLoader.isUsableUrl("http://127.0.0.1/x.png"));      // SSRF guard
         assertFalse(ImageLoader.isUsableUrl(null));
         assertFalse(ImageLoader.isUsableUrl(""));
         assertFalse(ImageLoader.isUsableUrl("ftp://a.com/x.png"));
         assertFalse(ImageLoader.isUsableUrl("not a url"));
         assertFalse(ImageLoader.isUsableUrl("https://"));
+    }
+
+    /**
+     * SSRF-1 wiring guard (audit SEC-1/B8). The guard is only as good as the
+     * client it runs on: if {@code CLIENT} is rebuilt with {@code Redirect.NORMAL}
+     * the transport follows a 302 to {@code http://127.0.0.1/} itself and
+     * {@link SafeHttpFetch} never sees the hop. Asserting the mode makes putting
+     * {@code NORMAL} back a red test instead of a silent bypass.
+     */
+    @Test
+    void clientNeverFollowsRedirectsImplicitly() {
+        assertSame(java.net.http.HttpClient.Redirect.NEVER, ImageLoader.redirectPolicy(),
+            "ImageLoader's shared client must NOT follow redirects itself; "
+                + "SafeHttpFetch follows them under the SSRF policy");
     }
 }

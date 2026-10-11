@@ -96,6 +96,116 @@ class DiskMediaStoreTest {
         assertEquals("size mismatch", r);
     }
 
+    // ---- M1 defect 2: per-player byte quota + per-player file-count cap ----
+
+    /** Upload one complete file on behalf of {@code player}. */
+    private static String storeFile(DiskMediaStore store, long uploadId, String player, int size) {
+        int chunks = DiskMediaStore.totalChunksFor(size);
+        String begin = store.beginUpload(uploadId, player, chunks, size, "image/png");
+        assertNull(begin, "begin must be accepted: " + begin);
+        String id = null;
+        for (int i = 0; i < chunks; i++) {
+            int len = Math.min(DiskMediaStore.CHUNK_BYTES, size - i * DiskMediaStore.CHUNK_BYTES);
+            id = store.acceptChunk(uploadId, i, new byte[len]);
+        }
+        assertNotNull(id);
+        return id;
+    }
+
+    @Test
+    void capsPerPlayerBytesAcrossFiles() throws IOException {
+        Path dir = Files.createTempDirectory("e33media");
+        // Global quota is generous; the per-player quota is what must bind.
+        DiskMediaStore store = new DiskMediaStore(dir, DiskMediaStore.MAX_SINGLE_BYTES,
+            1_000_000, 0, 10_000, 100);
+        storeFile(store, 1, "alice", 4_000);
+        storeFile(store, 2, "alice", 4_000); // alice now holds 8_000 of 10_000
+        // A third 4 kB file would exceed the per-player cap.
+        assertEquals("quota exceeded", store.beginUpload(3, "alice", 1, 4_000, "image/png"));
+        // Bob is unaffected by alice being full.
+        assertNull(store.beginUpload(4, "bob", 1, 8_000, "image/png"));
+    }
+
+    @Test
+    void rejectedPerPlayerUploadConsumesNoQuota() throws IOException {
+        Path dir = Files.createTempDirectory("e33media");
+        DiskMediaStore store = new DiskMediaStore(dir, DiskMediaStore.MAX_SINGLE_BYTES,
+            1_000_000, 0, 10_000, 100);
+        storeFile(store, 1, "alice", 8_000);
+        assertEquals("quota exceeded", store.beginUpload(2, "alice", 1, 4_000, "image/png"));
+        // The rejected attempt must not have reserved anything: a 2 kB file that
+        // fits the remaining 2_000 bytes is still accepted.
+        assertNull(store.beginUpload(3, "alice", 1, 2_000, "image/png"));
+    }
+
+    @Test
+    void capsPerPlayerFileCount() throws IOException {
+        Path dir = Files.createTempDirectory("e33media");
+        DiskMediaStore store = new DiskMediaStore(dir, DiskMediaStore.MAX_SINGLE_BYTES,
+            DiskMediaStore.QUOTA_BYTES, 0, DiskMediaStore.MAX_PLAYER_BYTES, 3);
+        storeFile(store, 1, "alice", 10);
+        storeFile(store, 2, "alice", 10);
+        storeFile(store, 3, "alice", 10);
+        assertEquals("too many files", store.beginUpload(4, "alice", 1, 10, "image/png"));
+        assertNull(store.beginUpload(5, "bob", 1, 10, "image/png"));
+    }
+
+    @Test
+    void zeroByteUploadIsRejected() throws IOException {
+        Path dir = Files.createTempDirectory("e33media");
+        DiskMediaStore store = new DiskMediaStore(dir);
+        assertEquals("too large", store.beginUpload(1, "alice", 1, 0, "image/png"));
+    }
+
+    // ---- M1 defect 3: acceptChunk must not walk the directory (M11) ----
+
+    /**
+     * The real M11 probe. The store is pointed at a directory whose filesystem
+     * counts every directory enumeration, so an old {@code dirSize()} —
+     * {@code Files.walk(dir)} returning inside {@code acceptChunk} — is observed
+     * and fails this test. Asserting a production counter would not do that:
+     * such a counter only moves where the production code chooses to bump it, so
+     * a re-introduced raw walk would leave it untouched (the earlier version of
+     * this test passed with the walk put back).
+     */
+    @Test
+    void acceptChunkDoesNotScanTheDirectory() throws IOException {
+        Path real = Files.createTempDirectory("e33media");
+        // Seed files so an O(files) walk would be obvious.
+        for (int i = 0; i < 50; i++) {
+            Files.write(real.resolve(DiskMediaStore.newMediaId()), new byte[16]);
+        }
+        CountingFileSystem.Wrapped counting = CountingFileSystem.wrap(real);
+        DiskMediaStore store = new DiskMediaStore(counting.path());
+        assertNull(store.beginUpload(1, "alice", 3, 1_500, "image/png"));
+        int before = counting.directoryStreamCount();
+        assertNull(store.acceptChunk(1, 0, new byte[600]));
+        assertNull(store.acceptChunk(1, 1, new byte[600]));
+        assertNotNull(store.acceptChunk(1, 2, new byte[300])); // final chunk returns the mediaId
+        assertEquals(before, counting.directoryStreamCount(),
+            "acceptChunk must answer the quota from incremental counters, not enumerate the directory");
+
+        // Sanity: the probe is live — an explicit walk over the same wrapped
+        // directory does move the count, so a blank result above cannot be a
+        // broken probe.
+        int probeBefore = counting.directoryStreamCount();
+        try (var s = Files.walk(counting.path())) { s.forEach(p -> {}); }
+        assertTrue(counting.directoryStreamCount() > probeBefore,
+            "the counting filesystem must observe a real Files.walk");
+    }
+
+    @Test
+    void chunkBeyondAdvertisedTotalIsRefusedBeforeWriting() throws IOException {
+        Path dir = Files.createTempDirectory("e33media");
+        DiskMediaStore store = new DiskMediaStore(dir);
+        assertNull(store.beginUpload(1, "alice", 3, 1_000, "image/png"));
+        assertNull(store.acceptChunk(1, 0, new byte[600]));
+        // 600 + 600 > the advertised 1_000: refused and the session ended here,
+        // instead of being written and only noticed on the final chunk.
+        assertEquals("size mismatch", store.acceptChunk(1, 1, new byte[600]));
+        assertNull(store.acceptChunk(1, 2, new byte[600]));
+    }
+
     @Test
     void readMissingReturnsNull() {
         DiskMediaStore store = new DiskMediaStore(Path.of("nonexistent"));
