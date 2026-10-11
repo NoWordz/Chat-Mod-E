@@ -136,14 +136,20 @@ class ChatBubbleScreenSidebarWiringTest {
 
     @Test
     void createButtonHitIsItsOwnBandAndSideInset() {
-        assertTrue(ChatBubbleScreen.isCreateButtonHit(SidebarModel.createButtonY(278), 40, 278), "top edge");
+        int panelBottom = 278;
+        int top = SidebarModel.createButtonY(panelBottom);
+        int left = SidebarModel.createButtonX();
+        int right = left + SidebarModel.createButtonW();
+        int midX = (left + right) / 2;
+        assertTrue(ChatBubbleScreen.isCreateButtonHit(top, midX, panelBottom), "top edge");
         assertTrue(ChatBubbleScreen.isCreateButtonHit(
-            SidebarModel.createButtonY(278) + SidebarModel.CREATE_BTN_H, 40, 278), "bottom edge");
-        assertFalse(ChatBubbleScreen.isCreateButtonHit(
-            SidebarModel.createButtonY(278) - 1, 40, 278), "above the button");
-        assertFalse(ChatBubbleScreen.isCreateButtonHit(SidebarModel.createButtonY(278), 2, 278),
-            "left of the 4px inset");
-        assertFalse(ChatBubbleScreen.isCreateButtonHit(SidebarModel.createButtonY(278), 88, 278),
-            "right of the 4px inset");
+            top + SidebarModel.CREATE_BTN_H, midX, panelBottom), "bottom edge");
+        assertFalse(ChatBubbleScreen.isCreateButtonHit(top - 1, midX, panelBottom), "above the button");
+        // The hit band is the drawn frame from createButtonX/createButtonW — an old
+        // hard-coded `4`/`WIDTH-8` draw would no longer line up with these edges.
+        assertTrue(ChatBubbleScreen.isCreateButtonHit(top, left, panelBottom), "left frame edge");
+        assertTrue(ChatBubbleScreen.isCreateButtonHit(top, right, panelBottom), "right frame edge");
+        assertFalse(ChatBubbleScreen.isCreateButtonHit(top, left - 1, panelBottom), "left of the inset");
+        assertFalse(ChatBubbleScreen.isCreateButtonHit(top, right + 1, panelBottom), "right of the inset");
     }
 }
