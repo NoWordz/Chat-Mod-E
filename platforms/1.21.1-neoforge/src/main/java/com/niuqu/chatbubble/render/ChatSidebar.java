@@ -45,7 +45,7 @@ public final class ChatSidebar {
         if (mouseY >= SidebarModel.PUBLIC_Y && mouseY <= SidebarModel.PUBLIC_Y + ITEM_H) return true;
 
         // Group rows (the 「我的群」 caption above them is not a target) and the pinned
-        // create button — geometry from UiLayout, shared by all targets.
+        // create button — geometry from SidebarModel, shared by all targets.
         int listEnd = SidebarModel.listBottom(listBottom);
         int groupCount = groupCount();
         int firstRow = SidebarModel.groupFirstRow(groupCount, groupScroll);
@@ -57,7 +57,8 @@ public final class ChatSidebar {
         }
         int btnY = SidebarModel.createButtonY(listBottom);
         if (mouseY >= btnY && mouseY <= btnY + SidebarModel.CREATE_BTN_H
-            && localX >= 4 && localX <= WIDTH - 4) return true;
+            && localX >= SidebarModel.createButtonX()
+            && localX <= SidebarModel.createButtonX() + SidebarModel.createButtonW()) return true;
 
         var players = new ArrayList<>(mc.player.connection.getOnlinePlayers());
         String selfName = mc.player.getName().getString();
@@ -167,7 +168,7 @@ public final class ChatSidebar {
         y += ITEM_H + 2;
 
         // ---- Group rows (2.5.0: groups left the top tab strip for this column).
-        // All geometry comes from UiLayout, so the three targets cannot drift. The
+        // All geometry comes from SidebarModel, so the three targets cannot drift. The
         // block shows at most SIDEBAR_GROUP_MAX_ROWS rows and scrolls beyond that.
         int sidebarBottom = msgBottom > 0 ? msgBottom : screenH - ChatLayout.BAR_H;
         int listEnd = SidebarModel.listBottom(sidebarBottom);
@@ -312,14 +313,16 @@ public final class ChatSidebar {
         // 「＋ 创建群组」: the standalone button pinned above the input bar (its own strip;
         // the group block above it stops at the block's lower bound).
         int btnY = SidebarModel.createButtonY(sidebarBottom);
-        boolean hoverBtn = mouseX >= 4 && mouseX <= WIDTH - 4
+        int btnX = SidebarModel.createButtonX();
+        int btnW = SidebarModel.createButtonW();
+        boolean hoverBtn = mouseX >= btnX && mouseX <= btnX + btnW
             && mouseY >= btnY && mouseY <= btnY + SidebarModel.CREATE_BTN_H;
         com.niuqu.chatbubble.texture.ColoredTextureRenderer.drawWithAlpha(g,
             UiTextureManager.rl(hoverBtn ? UiElement.SIDEBAR_HOVER : UiElement.INPUT_BG),
-            4, btnY, WIDTH - 8, SidebarModel.CREATE_BTN_H, alpha);
+            btnX, btnY, btnW, SidebarModel.CREATE_BTN_H, alpha);
         String create = Component.translatable("e33chat.sidebar.create_group").getString();
-        g.drawString(font, Component.literal(create), UiLayout.centerX(0, WIDTH, font.width(create)),
-            btnY + 6, c.textPrimary(), false);
+        g.drawString(font, Component.literal(create),
+            SidebarModel.createButtonTextX(font.width(create)), btnY + 6, c.textPrimary(), false);
         return newMaxScroll;
     }
 

@@ -13,7 +13,7 @@ package com.niuqu.chatbubble.logic;
  *   <li>row height 22 / step 24 — {@code ChatSidebar.java:22 ITEM_H=22}, advance {@code ITEM_H+2}</li>
  *   <li>world row top 19 — {@code 2 + SEARCH_H(14) + 3}</li>
  *   <li>group title 45, first group row 57 — {@code _e33_250/uireview.md §1}</li>
- *   <li>list bottom / create button for a 278px area: 252 / 256 — {@code uireview.md §3}</li>
+ *   <li>list bottom / create button for a 278px area: 248 / 252 — {@code uireview.md §3}</li>
  * </ul>
  */
 public final class SidebarModel {
@@ -35,8 +35,17 @@ public final class SidebarModel {
     public static final int GROUP_MAX_ROWS = 5;
     /** Height of the pinned 「＋ 创建群组」 button. */
     public static final int CREATE_BTN_H = 20;
-    /** Left/right inset of the create button inside the sidebar (hit is `4..WIDTH-4`). */
-    public static final int CREATE_INSET = 4;
+    /**
+     * Left/right inset of the create button inside the sidebar. Both the draw and the
+     * hit test read this: the frame spans {@code CREATE_INSET .. WIDTH - CREATE_INSET}
+     * (see {@link #createButtonX()} / {@link #createButtonW()}), so it is symmetrically
+     * centred in the column instead of edge-flush.
+     */
+    public static final int CREATE_INSET = 6;
+    /** Gap between the create button's lower edge and the bottom edge of the list area. */
+    public static final int CREATE_BOTTOM_INSET = 6;
+    /** Strip the create button keeps clear above itself, i.e. below the scrolling lists. */
+    public static final int CREATE_LIST_GAP = 4;
     /**
      * Invite-picker rows shown at once. The picker scrolls (row-granular) beyond
      * this, so a long group list can never grow the popup past the panel edge.
@@ -116,14 +125,34 @@ public final class SidebarModel {
         return createRowY(groupCount) + ROW_STEP;
     }
 
-    /** Top of the bottom-pinned 「＋ 创建群组」 button, from the list area's bottom edge. */
-    public static int createButtonY(int panelBottom) {
-        return panelBottom - CREATE_BTN_H - 2;
+    /** Left edge of the 「＋ 创建群组」 button frame inside the sidebar. */
+    public static int createButtonX() {
+        return CREATE_INSET;
     }
 
-    /** Bottom of the scrolling lists: the create button keeps its own 4px strip. */
+    /** Width of the 「＋ 创建群组」 button frame (equal insets on both sides). */
+    public static int createButtonW() {
+        return WIDTH - 2 * CREATE_INSET;
+    }
+
+    /** Top of the bottom-pinned 「＋ 创建群组」 button, from the list area's bottom edge. */
+    public static int createButtonY(int panelBottom) {
+        return panelBottom - CREATE_BTN_H - CREATE_BOTTOM_INSET;
+    }
+
+    /**
+     * Text x for a label of {@code textWidth}, centred inside the button frame rather
+     * than the full column. For the symmetric frame the two coincide, but deriving it
+     * from the frame keeps the label honest if the insets ever diverge — and keeps the
+     * three screens from growing a second, hand-copied centring formula.
+     */
+    public static int createButtonTextX(int textWidth) {
+        return createButtonX() + (createButtonW() - textWidth) / 2;
+    }
+
+    /** Bottom of the scrolling lists: the create button keeps its own strip below it. */
     public static int listBottom(int panelBottom) {
-        return createButtonY(panelBottom) - 4;
+        return createButtonY(panelBottom) - CREATE_LIST_GAP;
     }
 
     // ---- hit testing ----

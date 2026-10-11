@@ -515,11 +515,12 @@ public class ChatBubbleScreen extends ChatScreen {
         return mouseY >= rowY && mouseY <= rowY + SidebarModel.ROW_H;
     }
 
-    /** The pinned 「＋ 创建群组」 band, including its 4px side inset. */
+    /** The pinned 「＋ 创建群组」 band, including its symmetric side inset. */
     static boolean isCreateButtonHit(double mouseY, double localX, int panelBottom) {
         int createY = SidebarModel.createButtonY(panelBottom);
         return mouseY >= createY && mouseY <= createY + SidebarModel.CREATE_BTN_H
-            && localX >= SidebarModel.CREATE_INSET && localX <= SidebarModel.WIDTH - SidebarModel.CREATE_INSET;
+            && localX >= SidebarModel.createButtonX()
+            && localX <= SidebarModel.createButtonX() + SidebarModel.createButtonW();
     }
 
     private void renderSidebar(GuiGraphics g, int mouseX, int mouseY, float alpha) {

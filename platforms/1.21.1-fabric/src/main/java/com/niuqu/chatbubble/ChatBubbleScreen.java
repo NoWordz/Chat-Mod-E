@@ -559,11 +559,12 @@ public class ChatBubbleScreen extends ChatScreen {
         return mouseY >= rowY && mouseY <= rowY + SidebarModel.ROW_H;
     }
 
-    /** The pinned 「＋ 创建群组」 band, including its 4px side inset. */
+    /** The pinned 「＋ 创建群组」 band, including its symmetric side inset. */
     static boolean isCreateButtonHit(double mouseY, double localX, int panelBottom) {
         int createY = SidebarModel.createButtonY(panelBottom);
         return mouseY >= createY && mouseY <= createY + SidebarModel.CREATE_BTN_H
-            && localX >= SidebarModel.CREATE_INSET && localX <= SidebarModel.WIDTH - SidebarModel.CREATE_INSET;
+            && localX >= SidebarModel.createButtonX()
+            && localX <= SidebarModel.createButtonX() + SidebarModel.createButtonW();
     }
 
     private void renderSidebar(DrawContext g, int mouseX, int mouseY, float alpha) {
@@ -750,16 +751,17 @@ public class ChatBubbleScreen extends ChatScreen {
         }
 
         // 「＋ 创建群组」: the standalone button pinned above the input bar.
-        int createY = com.niuqu.chatbubble.logic.SidebarModel.createButtonY(
-            msgBottom > 0 ? msgBottom : height - BAR_H);
-        boolean hoverCreate = mouseX >= 4 && mouseX <= SIDEBAR_W - 4
-            && mouseY >= createY && mouseY <= createY + com.niuqu.chatbubble.logic.SidebarModel.CREATE_BTN_H;
+        int createY = SidebarModel.createButtonY(msgBottom > 0 ? msgBottom : height - BAR_H);
+        int createX = SidebarModel.createButtonX();
+        int createW = SidebarModel.createButtonW();
+        boolean hoverCreate = mouseX >= createX && mouseX <= createX + createW
+            && mouseY >= createY && mouseY <= createY + SidebarModel.CREATE_BTN_H;
         ColoredTextureRenderer.drawWithAlpha(g,
             UiTextureManager.rl(hoverCreate ? UiElement.SIDEBAR_HOVER : UiElement.INPUT_BG),
-            4, createY, SIDEBAR_W - 8, com.niuqu.chatbubble.logic.SidebarModel.CREATE_BTN_H, alpha);
+            createX, createY, createW, SidebarModel.CREATE_BTN_H, alpha);
         String createLabel = Text.translatable("e33chat.sidebar.create_group").getString();
         g.drawText(textRenderer, createLabel,
-            com.niuqu.chatbubble.render.UiLayout.centerX(0, SIDEBAR_W, textRenderer.getWidth(createLabel)),
+            SidebarModel.createButtonTextX(textRenderer.getWidth(createLabel)),
             createY + 6, c().textPrimary(), false);
     }
 

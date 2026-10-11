@@ -1,5 +1,6 @@
 package com.niuqu.chatbubble.logic;
 
+import com.niuqu.chatbubble.render.UiLayout;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -13,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Geometry facts pinned against the live code (baseline 26e1e92e):
  *  - row height / step 22 / 24  -> ChatSidebar.java:22 ITEM_H, row advance ITEM_H+2
  *  - public row top 19          -> 2 + SEARCH_H(14) + 3
- *  - list bottom 252 / button 256 for a 278px msg area -> _e33_250/uireview.md §3
+ *  - list bottom 248 / button 252 for a 278px msg area -> SidebarModel.createButtonY/listBottom
  */
 class SidebarModelTest {
 
@@ -69,8 +70,65 @@ class SidebarModelTest {
         int listEnd = SidebarModel.listBottom(278);
         assertTrue(SidebarModel.playerStartY(50) < listEnd,
             "50 groups must not push the player list into/past the button strip");
-        assertEquals(252, listEnd);
-        assertEquals(256, SidebarModel.createButtonY(278));
+        assertEquals(248, listEnd);
+        assertEquals(252, SidebarModel.createButtonY(278));
+    }
+
+    // ---- create button frame ----
+
+    @Test void createButtonFrameIsSymmetricallyInset() {
+        int left = SidebarModel.createButtonX();
+        int right = SidebarModel.WIDTH - (SidebarModel.createButtonX() + SidebarModel.createButtonW());
+        assertEquals(SidebarModel.CREATE_INSET, left, "left inset");
+        assertEquals(SidebarModel.CREATE_INSET, right, "right inset must equal the left one");
+        assertEquals(left, right, "the 2.4.0 edge-flush/1px-right look is exactly what this pins against");
+    }
+
+    @Test void createButtonWidthLeavesRoomOnBothSides() {
+        assertEquals(SidebarModel.WIDTH - 2 * SidebarModel.CREATE_INSET, SidebarModel.createButtonW());
+        // 6px inset -> a 78px-wide frame in the 90px column, not a 82px edge-to-edge slab
+        assertEquals(6, SidebarModel.CREATE_INSET);
+        assertEquals(78, SidebarModel.createButtonW());
+    }
+
+    @Test void createButtonTextCentreSitsOnTheFrameCentre() {
+        int frameCentre2 = 2 * SidebarModel.createButtonX() + SidebarModel.createButtonW();
+        for (int tw : new int[] {0, 1, 40, 43, 60, 77}) {
+            int textLeft = SidebarModel.createButtonTextX(tw);
+            int textCentre2 = 2 * textLeft + tw; // doubled centre: no division rounding
+            assertTrue(Math.abs(textCentre2 - frameCentre2) <= 1,
+                "text of width " + tw + " must sit on the button frame centre (within a px)");
+        }
+        // A symmetric frame makes frame centring identical to full-column centring, so a
+        // second, hand-copied formula (the three screens used centerX(0, WIDTH)) can never
+        // drift from this one.
+        assertEquals(UiLayout.centerX(0, SidebarModel.WIDTH, 40), SidebarModel.createButtonTextX(40));
+        assertEquals(UiLayout.centerX(0, SidebarModel.WIDTH, 63), SidebarModel.createButtonTextX(63));
+    }
+
+    @Test void createButtonKeepsItsOwnStripBelowTheLists() {
+        int panelBottom = 278;
+        int btnTop = SidebarModel.createButtonY(panelBottom);
+        int listEnd = SidebarModel.listBottom(panelBottom);
+        int btnBottom = btnTop + SidebarModel.CREATE_BTN_H;
+        assertTrue(listEnd < btnTop, "the list must end above the button frame");
+        assertEquals(SidebarModel.CREATE_LIST_GAP, btnTop - listEnd);
+        assertEquals(SidebarModel.CREATE_BOTTOM_INSET, panelBottom - btnBottom,
+            "the button must not sit flush against the panel bottom");
+    }
+
+    @Test void createButtonHitUsesTheDrawnFrame() {
+        // The hit band must be exactly the frame drawn from createButtonX/createButtonW,
+        // so a hard-coded draw (old `4`/`WIDTH-8`) can never drift from the hit again.
+        int panelBottom = 278;
+        int top = SidebarModel.createButtonY(panelBottom);
+        int left = SidebarModel.createButtonX();
+        int right = left + SidebarModel.createButtonW();
+        assertEquals(SidebarModel.Row.CREATE, hit(top, left, 0, 0, 0, panelBottom), "top-left corner");
+        assertEquals(SidebarModel.Row.CREATE, hit(top + SidebarModel.CREATE_BTN_H, right, 0, 0, 0, panelBottom),
+            "bottom-right corner");
+        assertEquals(SidebarModel.Row.NONE, hit(top, left - 1, 0, 0, 0, panelBottom), "one px left of the frame");
+        assertEquals(SidebarModel.Row.NONE, hit(top, right + 1, 0, 0, 0, panelBottom), "one px right of the frame");
     }
 
     // ---- hit testing ----
@@ -95,11 +153,11 @@ class SidebarModelTest {
     }
 
     @Test void createButtonOnlyInItsOwnBandAndSidebarX() {
-        assertEquals(SidebarModel.Row.CREATE, hit(256, 40, 0, 0, 0, 278), "top edge");
-        assertEquals(SidebarModel.Row.CREATE, hit(276, 40, 0, 0, 0, 278), "bottom edge");
-        assertEquals(SidebarModel.Row.NONE, hit(277, 40, 0, 0, 0, 278));
-        assertEquals(SidebarModel.Row.NONE, hit(256, 2, 0, 0, 0, 278), "left of the 4px inset");
-        assertEquals(SidebarModel.Row.NONE, hit(256, 88, 0, 0, 0, 278), "right of the 4px inset");
+        assertEquals(SidebarModel.Row.CREATE, hit(252, 40, 0, 0, 0, 278), "top edge");
+        assertEquals(SidebarModel.Row.CREATE, hit(272, 40, 0, 0, 0, 278), "bottom edge");
+        assertEquals(SidebarModel.Row.NONE, hit(273, 40, 0, 0, 0, 278));
+        assertEquals(SidebarModel.Row.NONE, hit(252, 2, 0, 0, 0, 278), "left of the 6px inset");
+        assertEquals(SidebarModel.Row.NONE, hit(252, 88, 0, 0, 0, 278), "right of the 6px inset");
     }
 
     @Test void longGroupListCannotShadowTheCreateButton() {
@@ -128,8 +186,13 @@ class SidebarModelTest {
     }
 
     @Test void squeezedPlayerListHasNoHits() {
-        // group block caps playerStartY at 201; a 220px panel leaves listEnd 194 -> nothing
-        assertEquals(SidebarModel.Row.NONE, hit(196, 40, 20, 3, 0, 220));
+        // group block caps playerStartY at 201; a 220px panel leaves listEnd 190, so no
+        // player row fits. The band just under the list is the dead gap before the button
+        // (which now sits 4px lower-space above the panel bottom).
+        int listEnd = SidebarModel.listBottom(220);
+        assertEquals(SidebarModel.Row.NONE, hit(listEnd + 1, 40, 20, 3, 0, 220));
+        assertEquals(SidebarModel.Row.CREATE, hit(SidebarModel.createButtonY(220), 40, 20, 3, 0, 220),
+            "the button takes the vertical space the squeezed list could not use");
     }
 
     // ---- helpers ----
