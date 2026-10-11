@@ -296,6 +296,8 @@
   "e33chat.group.member_hint": "仅群主",
   "e33chat.group.name_placeholder": "输入名称…",
   "e33chat.group.confirm_btn": "确认",
+  "e33chat.group.rename_placeholder": "输入新名称…",
+  "e33chat.group.check_btn": "确认修改",
   "e33chat.group.back_btn": "返回",
   "e33chat.group.create_placeholder": "输入名称创建群组…",
   "e33chat.group.create_btn": "创建",

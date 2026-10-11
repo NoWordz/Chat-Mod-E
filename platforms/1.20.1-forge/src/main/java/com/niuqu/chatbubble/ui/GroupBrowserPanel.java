@@ -54,6 +54,8 @@ public class GroupBrowserPanel {
     static final int INPUT_H = 14;
     static final int TITLE_H = 16;
     static final int MAX_ROWS = 6;
+    /** Right margin shared by 返回 and the input-row 确认 so their right edges line up (A2). */
+    static final int SIDE_MARGIN = 6;
 
     public boolean visible;
 
@@ -68,6 +70,13 @@ public class GroupBrowserPanel {
 
     /** Drilled-in group, or null for the list view. */
     private UUID selected;
+
+    /**
+     * True while the field is editing an existing group's name. 重命名 flips this on
+     * (prefilling the field) instead of firing RENAME immediately; 确认 / Enter then
+     * sends RENAME with the typed name. See {@link #onRenameButton} / {@link #onConfirm}.
+     */
+    private boolean renameMode;
 
     private int px, py, w, h;
 
@@ -172,7 +181,7 @@ public class GroupBrowserPanel {
         if (selected != null) {
             String back = Component.translatable("e33chat.group.back_btn").getString();
             int bw = font.width(back) + 8;
-            int bx = px + w - bw - 6;
+            int bx = backButtonX(px, w, bw);
             drawButton(g, font, c, back, bx, y - 1, bw, a255, mouseX, mouseY);
             backBtn = new int[]{bx, y - 1, bx + bw, y - 1 + TITLE_H - 2};
         }
@@ -322,7 +331,9 @@ public class GroupBrowserPanel {
                               int mouseX, int mouseY, int a255, int y, EditBox createInput, float alpha) {
         GroupDirectoryEntry entry = GroupChannelState.directoryEntry(selected);
         String name = entry != null ? entry.identity().displayName() : "";
-        g.drawString(font, Component.literal(name), px + 6, y + 1,
+        // A1: draw on the same row-centred baseline as this row's 邀请/重命名/解散
+        // buttons (drawSmall); the old bare y+1 sat ~3px above them.
+        g.drawString(font, Component.literal(name), px + 6, rowTextY(y, font.lineHeight),
             ChatBubbleTheme.alphaBlend(c.textPrimary(), a255), false);
 
         // Owner-only actions: rename / disband; everyone: invite.
@@ -331,7 +342,6 @@ public class GroupBrowserPanel {
         String invite = Component.translatable("e33chat.group.invite_btn").getString();
         String rename = Component.translatable("e33chat.group.rename_btn").getString();
         String disband = Component.translatable("e33chat.group.disband_btn").getString();
-        String back = Component.translatable("e33chat.group.back_btn").getString();
         int bx = px + 6 + font.width(name) + 8;
         int avail = px + w - 6 - bx;
         if (font.width(invite) + font.width(rename) + font.width(disband) + 30 <= avail && owner) {
@@ -372,15 +382,19 @@ public class GroupBrowserPanel {
         }
 
         y += 4;
+        // In rename mode the row is an editor for the current name: swap the hint and
+        // the button so the player sees what 确认 is about to do.
         renderInputRow(g, font, c, mouseX, mouseY, a255, y, createInput, alpha,
-            Component.translatable("e33chat.group.name_placeholder").getString(),
-            Component.translatable("e33chat.group.confirm_btn").getString());
+            Component.translatable(renameMode
+                ? "e33chat.group.rename_placeholder" : "e33chat.group.name_placeholder").getString(),
+            Component.translatable(renameMode
+                ? "e33chat.group.check_btn" : "e33chat.group.confirm_btn").getString());
     }
 
     private void renderInputRow(GuiGraphics g, Font font, ChatBubbleTheme.Colors c,
                                 int mouseX, int mouseY, int a255, int y, EditBox createInput, float alpha,
                                 String placeholder, String button) {
-        int inputW = w - 8 - (font.width(button) + 12);
+        int inputW = inputWidth(w, font.width(button));
         ColoredTextureRenderer.drawWithAlpha(g, UiTextureManager.rl(UiElement.INPUT_BG),
             px + 4, y, inputW, INPUT_H, alpha);
         boolean inputHover = mouseX >= px + 4 && mouseX <= px + 4 + inputW
@@ -397,7 +411,7 @@ public class GroupBrowserPanel {
                 ChatBubbleTheme.alphaBlend(c.textMuted(), a255), false);
         }
         int bw = font.width(button) + 8;
-        int bx = px + w - bw - 4;
+        int bx = inputButtonX(px, w, bw);
         drawButton(g, font, c, button, bx, y, bw, a255, mouseX, mouseY);
         createBtn = new int[]{bx, y, bx + bw, y + INPUT_H};
     }
@@ -419,7 +433,7 @@ public class GroupBrowserPanel {
         boolean hov = mouseX >= x && mouseX <= x + bw && mouseY >= y + 1 && mouseY <= y + ROW_H - 1;
         g.fill(x, y + 1, x + bw, y + ROW_H - 1,
             ChatBubbleTheme.alphaBlend(hov ? c.contextHover() : c.popupBg(), a255));
-        g.drawString(font, Component.literal(label), x + 4, y + (ROW_H - font.lineHeight) / 2 + 1,
+        g.drawString(font, Component.literal(label), x + 4, rowTextY(y, font.lineHeight),
             ChatBubbleTheme.alphaBlend(c.textSecondary(), a255), false);
         return new int[]{x, y + 1, x + bw, y + ROW_H - 1};
     }
@@ -440,7 +454,7 @@ public class GroupBrowserPanel {
         int code = hitTable.hit((int) mx, (int) my);
         if (code == PanelHitTable.NONE) return -1;
 
-        if (code == HIT_BACK) { selected = null; return -1; }
+        if (code == HIT_BACK) { selected = null; renameMode = false; return -1; }
 
         if (code >= HIT_ACCEPT_BASE && code < HIT_ACCEPT_BASE + inviteAcceptIds.size()) {
             actionInvitation = inviteAcceptIds.get(code - HIT_ACCEPT_BASE);
@@ -460,6 +474,7 @@ public class GroupBrowserPanel {
             }
             if (code >= HIT_GROUP_BASE && code < HIT_GROUP_BASE + groupRowIds.size()) {
                 selected = groupRowIds.get(code - HIT_GROUP_BASE);
+                renameMode = false; // a fresh group starts in invite mode, not rename mode
                 // The manage view's Enter/confirm paths route on actionGroupId, so bind it
                 // here too — otherwise Enter sent CREATE instead of INVITE.
                 actionGroupId = selected;
@@ -483,9 +498,10 @@ public class GroupBrowserPanel {
                 return ACT_INVITE;
             }
             if (code == HIT_RENAME) {
-                actionGroup = createInput.getValue().trim();
-                createInput.setValue("");
-                return ACT_RENAME;
+                // Do NOT fire RENAME here: the field usually holds nothing (or an
+                // invitee name), so the server answered bad_name ("字符错误"). Enter
+                // renameMode and let 确认 / Enter send the typed name instead.
+                return onRenameButton(createInput);
             }
             if (code == HIT_DISBAND) return ACT_DISBAND;
             if (code >= HIT_KICK_BASE && code < HIT_KICK_BASE + kickBtnIds.size()) {
@@ -498,14 +514,80 @@ public class GroupBrowserPanel {
             }
         }
 
-        if (code == HIT_CREATE) {
-            // Empty goes through so the server's own refusal is spoken (bad_name / no_target)
-            // instead of the click vanishing here.
-            actionGroup = createInput.getValue().trim();
-            createInput.setValue("");
-            return selected == null ? ACT_CREATE : ACT_INVITE;
+        if (code == HIT_CREATE) return onConfirm(createInput);
+        return -1;
+    }
+
+    /**
+     * 重命名 pressed: enter inline-edit mode instead of firing a packet. The field is
+     * prefilled with the current name and focused; 确认 / Enter then sends RENAME with
+     * the (edited) name. Never returns an action, so nothing leaves on this click.
+     */
+    int onRenameButton(EditBox createInput) {
+        renameMode = true;
+        String current = currentGroupName();
+        if (createInput != null) {
+            createInput.setValue(current);
+            createInput.setCursorPosition(current.length());
+            createInput.setFocused(true);
         }
         return -1;
+    }
+
+    /**
+     * 确认 / Enter. In {@link #renameMode} this sends RENAME with the field's text;
+     * otherwise it keeps the old semantics (INVITE while drilled in, CREATE in the
+     * list view). A blank rename is refused at this layer (returns {@code ACT_NONE}
+     * and stays in edit mode) so an empty field does not reach the server as bad_name.
+     */
+    int onConfirm(EditBox createInput) {
+        String typed = createInput != null ? createInput.getValue() : "";
+        ConfirmDecision d = decideConfirm(renameMode, selected != null, typed);
+        if (d.action() != ACT_NONE) actionGroup = d.name();
+        if (d.action() == ACT_RENAME) actionGroupId = selected;
+        renameMode = d.renameMode();
+        if (d.clearField() && createInput != null) createInput.setValue("");
+        return d.action();
+    }
+
+    /**
+     * Frame-independent routing for the confirm / Enter press — the load-bearing
+     * decision behind defect B, kept pure so it can be unit-tested without a
+     * Minecraft runtime.
+     *
+     * <ul>
+     *   <li>rename mode + blank field → {@code ACT_NONE}: keep editing, send nothing
+     *       (the old path fired RENAME with "" and the server answered bad_name).</li>
+     *   <li>rename mode + a name → {@code ACT_RENAME}, leaving rename mode, clearing the field.</li>
+     *   <li>otherwise → {@code ACT_INVITE} while a group is drilled in, else {@code ACT_CREATE}.</li>
+     * </ul>
+     */
+    static ConfirmDecision decideConfirm(boolean renameMode, boolean managing, String typed) {
+        String name = typed == null ? "" : typed.trim();
+        if (renameMode) {
+            if (name.isEmpty()) return new ConfirmDecision(ACT_NONE, "", true, false);
+            return new ConfirmDecision(ACT_RENAME, name, false, true);
+        }
+        return new ConfirmDecision(managing ? ACT_INVITE : ACT_CREATE, name, false, true);
+    }
+
+    /** Outcome of {@link #decideConfirm}: the action plus the state the panel moves to. */
+    record ConfirmDecision(int action, String name, boolean renameMode, boolean clearField) {}
+
+    /** 返回 from the manage view / opening a group: leave rename mode. */
+    public void exitRename() {
+        renameMode = false;
+    }
+
+    /** Whether 确认 / Enter currently sends RENAME (see {@link #onConfirm}). */
+    public boolean isRenaming() {
+        return renameMode;
+    }
+
+    /** Display name of the drilled-in group, or "" when none is available. */
+    private String currentGroupName() {
+        GroupDirectoryEntry entry = selected == null ? null : GroupChannelState.directoryEntry(selected);
+        return entry != null ? entry.identity().displayName() : "";
     }
 
     public boolean isClickOnPanel(double mx, double my) {
@@ -519,10 +601,40 @@ public class GroupBrowserPanel {
 
     public void reset() {
         selected = null;
+        renameMode = false;
         actionGroup = null;
         actionGroupId = null;
         actionSubject = null;
         actionInvitation = null;
+    }
+
+    // ------------------------------------------------------------------
+    // Shared row geometry (A1/A2). Pure integer maths so the three targets
+    // cannot drift and the alignment is unit-testable without a Minecraft runtime.
+    // ------------------------------------------------------------------
+
+    /**
+     * Baseline of a row's label drawn with the font's line height, matching
+     * {@code drawSmall}'s {@code y + (ROW_H - lineHeight)/2 + 1} so a plain row name
+     * sits on the same centre line as that row's buttons (A1).
+     */
+    static int rowTextY(int rowY, int lineHeight) {
+        return rowY + (ROW_H - lineHeight) / 2 + 1;
+    }
+
+    /** X of the input-row 确认 button: same right margin as 返回 (A2). */
+    static int inputButtonX(int px, int w, int buttonW) {
+        return px + w - buttonW - SIDE_MARGIN;
+    }
+
+    /** X of the title-row 返回 button (the reference margin the confirm button now shares). */
+    static int backButtonX(int px, int w, int buttonW) {
+        return px + w - buttonW - SIDE_MARGIN;
+    }
+
+    /** Width of the input box so its right edge keeps the 12px gap to the 确认 button. */
+    static int inputWidth(int w, int buttonW) {
+        return w - (SIDE_MARGIN + 4) - (buttonW + 12);
     }
 
     private static boolean over(double mx, double my, int[] r) {

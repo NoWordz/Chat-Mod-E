@@ -101,6 +101,7 @@
       "platforms": ["1.20.1-forge", "1.21.1-neoforge"]
     },
     "src/test/java/com/niuqu/chatbubble/server/GroupManagerValidationTest.java",
-    "src/test/java/com/niuqu/chatbubble/ui/ChatEmojiPanelGridTest.java"
+    "src/test/java/com/niuqu/chatbubble/ui/ChatEmojiPanelGridTest.java",
+    "src/test/java/com/niuqu/chatbubble/ui/GroupBrowserPanelTest.java"
   ]
 }

@@ -886,7 +886,15 @@ public class ChatBubbleScreen extends ChatScreen {
             String name = groupCreateInput.getValue().trim();
             if (!name.isEmpty()) {
                 groupCreateInput.setValue("");
-                if (groupBrowser.isManaging() && groupBrowser.actionGroupId != null) {
+                if (groupBrowser.isRenaming()) {
+                    // renameMode: Enter confirms the typed name as the group's new name.
+                    com.niuqu.chatbubble.packets.GroupActionV2Payload.send(
+                        com.niuqu.chatbubble.packets.GroupActionV2Payload.RENAME,
+                        groupBrowser.actionGroupId,
+                        com.niuqu.chatbubble.packets.GroupActionV2Payload.NONE,
+                        com.niuqu.chatbubble.packets.GroupActionV2Payload.NONE, name);
+                    groupBrowser.exitRename();
+                } else if (groupBrowser.isManaging() && groupBrowser.actionGroupId != null) {
                     com.niuqu.chatbubble.packets.GroupActionV2Payload.send(
                         com.niuqu.chatbubble.packets.GroupActionV2Payload.INVITE,
                         groupBrowser.actionGroupId,
