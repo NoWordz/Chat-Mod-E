@@ -161,4 +161,79 @@ class PacketCodecTest {
                 List.of(), List.of("w")),
             ServerConfigSavePayload.STREAM_CODEC);
     }
+
+    // ---- 2.5.0 group protocol v2 (optional payload ids end with _v2) ----
+
+    private static com.niuqu.chatbubble.group.GroupDirectoryEntry directoryEntry(UUID groupId, String name) {
+        return new com.niuqu.chatbubble.group.GroupDirectoryEntry(
+            new com.niuqu.chatbubble.group.GroupIdentity(groupId, name),
+            new UUID(7, 7), List.of(new UUID(7, 7), new UUID(8, 8)),
+            12L, true, 900L, 5L);
+    }
+
+    @Test void groupProtocolHelloStable() {
+        assertStable(new com.niuqu.chatbubble.packets.GroupProtocolHelloPayload(1),
+            com.niuqu.chatbubble.packets.GroupProtocolHelloPayload.STREAM_CODEC);
+    }
+
+    @Test void groupProtocolAckStable() {
+        assertStable(new com.niuqu.chatbubble.packets.GroupProtocolAckPayload(1, true),
+            com.niuqu.chatbubble.packets.GroupProtocolAckPayload.STREAM_CODEC);
+    }
+
+    @Test void groupDirectoryStable() {
+        UUID groupId = UUID.fromString("00000000-0000-0000-0000-00000000000a");
+        assertStable(new com.niuqu.chatbubble.packets.GroupDirectoryPayload(
+                List.of(directoryEntry(groupId, "公會")),
+                List.of(new com.niuqu.chatbubble.group.GroupInvitationSummary(
+                    new UUID(9, 9), groupId, "公會", new UUID(7, 7), 1700000000000L, 1700000600000L))),
+            com.niuqu.chatbubble.packets.GroupDirectoryPayload.STREAM_CODEC);
+    }
+
+    @Test void groupDirectoryEmptyStable() {
+        assertStable(new com.niuqu.chatbubble.packets.GroupDirectoryPayload(List.of(), List.of()),
+            com.niuqu.chatbubble.packets.GroupDirectoryPayload.STREAM_CODEC);
+    }
+
+    @Test void groupChatV2Stable() {
+        // Frozen 7-field tuple: groupId, sequence, senderUUID, senderName,
+        // content, quoteSender, quoteContent (the display name comes from the
+        // directory, never from this payload).
+        assertStable(new com.niuqu.chatbubble.packets.GroupChatV2Payload(
+                UUID.fromString("00000000-0000-0000-0000-00000000000a"), 42L,
+                new UUID(3, 3), "Steve", "hello group", "Alex", "quoted text"),
+            com.niuqu.chatbubble.packets.GroupChatV2Payload.STREAM_CODEC);
+    }
+
+    @Test void groupChatV2BlankQuoteStable() {
+        assertStable(new com.niuqu.chatbubble.packets.GroupChatV2Payload(
+                UUID.fromString("00000000-0000-0000-0000-00000000000a"), 1L,
+                new UUID(0, 0), "Steve", "hi", "", ""),
+            com.niuqu.chatbubble.packets.GroupChatV2Payload.STREAM_CODEC);
+    }
+
+    @Test void groupHistoryRequestStable() {
+        assertStable(new com.niuqu.chatbubble.packets.GroupHistoryRequestPayload(
+                UUID.fromString("00000000-0000-0000-0000-00000000000a"), 39L, 100),
+            com.niuqu.chatbubble.packets.GroupHistoryRequestPayload.STREAM_CODEC);
+    }
+
+    @Test void groupHistoryPageStable() {
+        UUID groupId = UUID.fromString("00000000-0000-0000-0000-00000000000a");
+        com.niuqu.chatbubble.group.GroupHistoryPage page = new com.niuqu.chatbubble.group.GroupHistoryPage(
+            groupId, 42L, true, List.of(
+                new com.niuqu.chatbubble.group.GroupHistoryEntry(groupId, 40L, new UUID(4, 4), "Steve",
+                    "line 40", 1700000000040L, "quoted", "Alex"),
+                new com.niuqu.chatbubble.group.GroupHistoryEntry(groupId, 41L, new UUID(4, 4), "Steve",
+                    "line 41", 1700000000041L, null, null)));
+        assertStable(new com.niuqu.chatbubble.packets.GroupHistoryPagePayload(page),
+            com.niuqu.chatbubble.packets.GroupHistoryPagePayload.STREAM_CODEC);
+    }
+
+    @Test void groupHistoryPageEmptyStable() {
+        UUID groupId = UUID.fromString("00000000-0000-0000-0000-00000000000a");
+        assertStable(new com.niuqu.chatbubble.packets.GroupHistoryPagePayload(
+                new com.niuqu.chatbubble.group.GroupHistoryPage(groupId, 39L, false, List.of())),
+            com.niuqu.chatbubble.packets.GroupHistoryPagePayload.STREAM_CODEC);
+    }
 }

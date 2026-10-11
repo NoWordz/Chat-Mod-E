@@ -80,5 +80,35 @@ public class NetworkHandler {
         registrar.playToClient(GroupChatPayload.TYPE, GroupChatPayload.STREAM_CODEC, GroupChatPayload::handleClient);
         registrar.playToClient(GroupListPayload.TYPE, GroupListPayload.STREAM_CODEC, GroupListPayload::handleClient);
         registrar.playToServer(GroupActionPayload.TYPE, GroupActionPayload.STREAM_CODEC, GroupActionPayload::handleServer);
+        // 2.5.0 group protocol v2, also optional: only a peer that declared these ids
+        // receives them. The v1 ids above stay registered so a 2.4.x peer keeps
+        // negotiating the main channel unchanged; the server answers a v1 action with
+        // "update your client" instead of the removed self-service join.
+        registrar.playToServer(com.niuqu.chatbubble.packets.GroupProtocolHelloPayload.TYPE,
+            com.niuqu.chatbubble.packets.GroupProtocolHelloPayload.STREAM_CODEC,
+            com.niuqu.chatbubble.packets.GroupProtocolHelloPayload::handleServer);
+        registrar.playToClient(com.niuqu.chatbubble.packets.GroupProtocolAckPayload.TYPE,
+            com.niuqu.chatbubble.packets.GroupProtocolAckPayload.STREAM_CODEC,
+            com.niuqu.chatbubble.packets.GroupProtocolAckPayload::handleClient);
+        registrar.playToClient(com.niuqu.chatbubble.packets.GroupDirectoryPayload.TYPE,
+            com.niuqu.chatbubble.packets.GroupDirectoryPayload.STREAM_CODEC,
+            com.niuqu.chatbubble.packets.GroupDirectoryPayload::handleClient);
+        registrar.playToClient(com.niuqu.chatbubble.packets.GroupChatV2Payload.TYPE,
+            com.niuqu.chatbubble.packets.GroupChatV2Payload.STREAM_CODEC,
+            com.niuqu.chatbubble.packets.GroupChatV2Payload::handleClient);
+        registrar.playToServer(com.niuqu.chatbubble.packets.GroupHistoryRequestPayload.TYPE,
+            com.niuqu.chatbubble.packets.GroupHistoryRequestPayload.STREAM_CODEC,
+            com.niuqu.chatbubble.packets.GroupHistoryRequestPayload::handleServer);
+        registrar.playToClient(com.niuqu.chatbubble.packets.GroupHistoryPagePayload.TYPE,
+            com.niuqu.chatbubble.packets.GroupHistoryPagePayload.STREAM_CODEC,
+            com.niuqu.chatbubble.packets.GroupHistoryPagePayload::handleClient);
+        registrar.playToServer(com.niuqu.chatbubble.packets.GroupActionV2Payload.TYPE,
+            com.niuqu.chatbubble.packets.GroupActionV2Payload.STREAM_CODEC,
+            com.niuqu.chatbubble.packets.GroupActionV2Payload::handleServer);
+        // Large recipient-scoped directories travel as chunks on the same protocol;
+        // small ones keep using the single GroupDirectoryPayload above.
+        registrar.playToClient(com.niuqu.chatbubble.packets.GroupDirectoryChunkPayload.TYPE,
+            com.niuqu.chatbubble.packets.GroupDirectoryChunkPayload.STREAM_CODEC,
+            com.niuqu.chatbubble.packets.GroupDirectoryChunkPayload::handleClient);
     }
 }

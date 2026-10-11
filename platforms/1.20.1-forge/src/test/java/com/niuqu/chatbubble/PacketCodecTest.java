@@ -173,4 +173,162 @@ class PacketCodecTest {
                 List.of(), List.of("w")),
             (p, buf) -> ServerConfigSavePacket.encode((ServerConfigSavePacket) p, buf), b -> ServerConfigSavePacket.decode(b));
     }
+
+    // ---- 2.5.0 group protocol v2 (independent channel, ids 0-5) ----
+
+    private static com.niuqu.chatbubble.group.GroupDirectoryEntry directoryEntry(UUID groupId, String name) {
+        return new com.niuqu.chatbubble.group.GroupDirectoryEntry(
+            new com.niuqu.chatbubble.group.GroupIdentity(groupId, name),
+            new UUID(7, 7), List.of(new UUID(7, 7), new UUID(8, 8)),
+            12L, true, 900L, 5L);
+    }
+
+    @Test void groupProtocolHelloStable() {
+        assertStable(new com.niuqu.chatbubble.packets.GroupProtocolHelloPacket(1),
+            (p, buf) -> com.niuqu.chatbubble.packets.GroupProtocolHelloPacket.encode(
+                (com.niuqu.chatbubble.packets.GroupProtocolHelloPacket) p, buf),
+            b -> com.niuqu.chatbubble.packets.GroupProtocolHelloPacket.decode(b));
+    }
+
+    @Test void groupProtocolAckStable() {
+        assertStable(new com.niuqu.chatbubble.packets.GroupProtocolAckPacket(1, true),
+            (p, buf) -> com.niuqu.chatbubble.packets.GroupProtocolAckPacket.encode(
+                (com.niuqu.chatbubble.packets.GroupProtocolAckPacket) p, buf),
+            b -> com.niuqu.chatbubble.packets.GroupProtocolAckPacket.decode(b));
+    }
+
+    @Test void groupDirectoryStable() {
+        UUID groupId = UUID.fromString("00000000-0000-0000-0000-00000000000a");
+        com.niuqu.chatbubble.packets.GroupDirectoryPacket packet =
+            new com.niuqu.chatbubble.packets.GroupDirectoryPacket(
+                List.of(directoryEntry(groupId, "公會")),
+                List.of(new com.niuqu.chatbubble.group.GroupInvitationSummary(
+                    new UUID(9, 9), groupId, "公會", new UUID(7, 7), 1700000000000L, 1700000600000L)));
+        assertStable(packet,
+            (p, buf) -> com.niuqu.chatbubble.packets.GroupDirectoryPacket.encode(
+                (com.niuqu.chatbubble.packets.GroupDirectoryPacket) p, buf),
+            b -> com.niuqu.chatbubble.packets.GroupDirectoryPacket.decode(b));
+    }
+
+    @Test void groupDirectoryEmptyStable() {
+        assertStable(new com.niuqu.chatbubble.packets.GroupDirectoryPacket(List.of(), List.of()),
+            (p, buf) -> com.niuqu.chatbubble.packets.GroupDirectoryPacket.encode(
+                (com.niuqu.chatbubble.packets.GroupDirectoryPacket) p, buf),
+            b -> com.niuqu.chatbubble.packets.GroupDirectoryPacket.decode(b));
+    }
+
+    @Test void groupChatV2Stable() {
+        // Frozen 7-field tuple: groupId, sequence, senderUUID, senderName,
+        // content, quoteSender, quoteContent (the display name comes from the
+        // directory, never from this payload).
+        assertStable(new com.niuqu.chatbubble.packets.GroupChatV2Packet(
+                UUID.fromString("00000000-0000-0000-0000-00000000000a"), 42L,
+                new UUID(3, 3), "Steve", "hello group", "Alex", "quoted text"),
+            (p, buf) -> com.niuqu.chatbubble.packets.GroupChatV2Packet.encode(
+                (com.niuqu.chatbubble.packets.GroupChatV2Packet) p, buf),
+            b -> com.niuqu.chatbubble.packets.GroupChatV2Packet.decode(b));
+    }
+
+    @Test void groupChatV2BlankQuoteStable() {
+        assertStable(new com.niuqu.chatbubble.packets.GroupChatV2Packet(
+                UUID.fromString("00000000-0000-0000-0000-00000000000a"), 1L,
+                new UUID(0, 0), "Steve", "hi", "", ""),
+            (p, buf) -> com.niuqu.chatbubble.packets.GroupChatV2Packet.encode(
+                (com.niuqu.chatbubble.packets.GroupChatV2Packet) p, buf),
+            b -> com.niuqu.chatbubble.packets.GroupChatV2Packet.decode(b));
+    }
+
+    @Test void groupHistoryRequestStable() {
+        assertStable(new com.niuqu.chatbubble.packets.GroupHistoryRequestPacket(
+                UUID.fromString("00000000-0000-0000-0000-00000000000a"), 39L, 100),
+            (p, buf) -> com.niuqu.chatbubble.packets.GroupHistoryRequestPacket.encode(
+                (com.niuqu.chatbubble.packets.GroupHistoryRequestPacket) p, buf),
+            b -> com.niuqu.chatbubble.packets.GroupHistoryRequestPacket.decode(b));
+    }
+
+    @Test void groupHistoryPageStable() {
+        UUID groupId = UUID.fromString("00000000-0000-0000-0000-00000000000a");
+        com.niuqu.chatbubble.group.GroupHistoryPage page = new com.niuqu.chatbubble.group.GroupHistoryPage(
+            groupId, 42L, true, List.of(
+                new com.niuqu.chatbubble.group.GroupHistoryEntry(groupId, 40L, new UUID(4, 4), "Steve",
+                    "line 40", 1700000000040L, "quoted", "Alex"),
+                new com.niuqu.chatbubble.group.GroupHistoryEntry(groupId, 41L, new UUID(4, 4), "Steve",
+                    "line 41", 1700000000041L, null, null)));
+        assertStable(new com.niuqu.chatbubble.packets.GroupHistoryPagePacket(page),
+            (p, buf) -> com.niuqu.chatbubble.packets.GroupHistoryPagePacket.encode(
+                (com.niuqu.chatbubble.packets.GroupHistoryPagePacket) p, buf),
+            b -> com.niuqu.chatbubble.packets.GroupHistoryPagePacket.decode(b));
+    }
+
+    @Test void groupHistoryPageEmptyStable() {
+        UUID groupId = UUID.fromString("00000000-0000-0000-0000-00000000000a");
+        assertStable(new com.niuqu.chatbubble.packets.GroupHistoryPagePacket(
+                new com.niuqu.chatbubble.group.GroupHistoryPage(groupId, 39L, false, List.of())),
+            (p, buf) -> com.niuqu.chatbubble.packets.GroupHistoryPagePacket.encode(
+                (com.niuqu.chatbubble.packets.GroupHistoryPagePacket) p, buf),
+            b -> com.niuqu.chatbubble.packets.GroupHistoryPagePacket.decode(b));
+    }
+
+    // ---- 2.5.0 group v2 lifecycle and chunked directory (GROUPS_CHANNEL 6 and 9) ----
+
+    @Test void groupActionV2StableForEveryActionCode() {
+        // Byte stability also proves the action survived: a re-encoded packet with a
+        // different code would not reproduce the original bytes.
+        for (int action = com.niuqu.chatbubble.packets.GroupActionV2Packet.CREATE;
+             action <= com.niuqu.chatbubble.packets.GroupActionV2Packet.DISBAND; action++) {
+            assertStable(new com.niuqu.chatbubble.packets.GroupActionV2Packet(action,
+                    com.niuqu.chatbubble.packets.GroupActionV2Packet.NONE,
+                    com.niuqu.chatbubble.packets.GroupActionV2Packet.NONE,
+                    com.niuqu.chatbubble.packets.GroupActionV2Packet.NONE,
+                    com.niuqu.chatbubble.packets.GroupActionV2Packet.NO_VALUE),
+                (p, buf) -> com.niuqu.chatbubble.packets.GroupActionV2Packet.encode(
+                    (com.niuqu.chatbubble.packets.GroupActionV2Packet) p, buf),
+                b -> com.niuqu.chatbubble.packets.GroupActionV2Packet.decode(b));
+        }
+    }
+
+    @Test void groupActionV2CarriesEveryWireField() {
+        UUID groupId = UUID.fromString("00000000-0000-0000-0000-00000000000a");
+        UUID subjectId = new UUID(1, 2);
+        UUID invitationId = new UUID(3, 4);
+        FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+        com.niuqu.chatbubble.packets.GroupActionV2Packet.encode(
+            new com.niuqu.chatbubble.packets.GroupActionV2Packet(
+                com.niuqu.chatbubble.packets.GroupActionV2Packet.INVITE,
+                groupId, subjectId, invitationId, "Guild"),
+            buf);
+        com.niuqu.chatbubble.packets.GroupActionV2Packet decoded =
+            com.niuqu.chatbubble.packets.GroupActionV2Packet.decode(buf);
+        assertEquals(com.niuqu.chatbubble.packets.GroupActionV2Packet.INVITE, decoded.action());
+        assertEquals(groupId, decoded.groupId());
+        assertEquals(subjectId, decoded.subjectId());
+        assertEquals(invitationId, decoded.invitationId());
+        assertEquals("Guild", decoded.value());
+    }
+
+    @Test void groupDirectoryChunkStable() {
+        assertStable(new com.niuqu.chatbubble.packets.GroupDirectoryChunkPacket(
+                UUID.fromString("00000000-0000-0000-0000-00000000000b"), 1, 3, new byte[]{1, 2, 3, 4}),
+            (p, buf) -> com.niuqu.chatbubble.packets.GroupDirectoryChunkPacket.encode(
+                (com.niuqu.chatbubble.packets.GroupDirectoryChunkPacket) p, buf),
+            b -> com.niuqu.chatbubble.packets.GroupDirectoryChunkPacket.decode(b));
+    }
+
+    @Test void groupDirectoryChunkOversizedSliceIsRejected() {
+        UUID transferId = UUID.fromString("00000000-0000-0000-0000-00000000000b");
+        int max = com.niuqu.chatbubble.packets.GroupDirectoryChunkPacket.MAX_CHUNK_BYTES;
+        assertThrows(IllegalArgumentException.class,
+            () -> new com.niuqu.chatbubble.packets.GroupDirectoryChunkPacket(
+                transferId, 0, 1, new byte[max + 1]),
+            "a slice over the chunk budget must never be constructed");
+
+        FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+        buf.writeUUID(transferId);
+        buf.writeVarInt(0);
+        buf.writeVarInt(1);
+        buf.writeByteArray(new byte[max + 1]);   // hostile slice length on the wire
+        assertThrows(RuntimeException.class,
+            () -> com.niuqu.chatbubble.packets.GroupDirectoryChunkPacket.decode(buf),
+            "the wire cap rejects an oversized slice instead of allocating it");
+    }
 }

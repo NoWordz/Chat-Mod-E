@@ -8,8 +8,16 @@ import com.niuqu.chatbubble.network.ConfigSyncV2Payload;
 import com.niuqu.chatbubble.network.ClientHelloPayload;
 import com.niuqu.chatbubble.network.EasyBotConfigPayload;
 import com.niuqu.chatbubble.network.GroupActionPayload;
+import com.niuqu.chatbubble.network.GroupActionV2Payload;
 import com.niuqu.chatbubble.network.GroupChatPayload;
+import com.niuqu.chatbubble.network.GroupChatV2Payload;
+import com.niuqu.chatbubble.network.GroupDirectoryChunkPayload;
+import com.niuqu.chatbubble.network.GroupDirectoryPayload;
+import com.niuqu.chatbubble.network.GroupHistoryPagePayload;
+import com.niuqu.chatbubble.network.GroupHistoryRequestPayload;
 import com.niuqu.chatbubble.network.GroupListPayload;
+import com.niuqu.chatbubble.network.GroupProtocolAckPayload;
+import com.niuqu.chatbubble.network.GroupProtocolHelloPayload;
 import com.niuqu.chatbubble.network.HistoryPayload;
 import com.niuqu.chatbubble.network.MediaRequestPayload;
 import com.niuqu.chatbubble.network.MediaResponsePayload;
@@ -24,6 +32,7 @@ import net.fabricmc.api.ModInitializer;
 import com.mojang.brigadier.ParseResults;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
@@ -67,6 +76,10 @@ public class ChatBubbleMod implements ModInitializer {
     private static int groupMaxCount = 20;
     private static int groupMaxMembers = 50;
     private static boolean groupCreateOpOnly = false;
+    private static int groupHistoryRetentionDays = 7;
+    private static int groupHistoryMaxMessages = 2000;
+    private static int groupHistoryMaxMiB = 16;
+    private static int groupInviteLifetimeDays = 7;
     private static List<String> chatTemplates = List.of();
     private static List<String> whisperTemplates = List.of();
     private static boolean configLoaded;
@@ -132,6 +145,17 @@ public class ChatBubbleMod implements ModInitializer {
         PayloadTypeRegistry.playS2C().register(GroupChatPayload.ID, GroupChatPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(GroupListPayload.ID, GroupListPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(GroupActionPayload.ID, GroupActionPayload.CODEC);
+        // 2.5.0 v2 group protocol, optional: a client that never handshakes keeps
+        // the v1 flow above untouched, and a v2 server answers a v1 action with
+        // "update your client" instead of the removed self-service join.
+        PayloadTypeRegistry.playC2S().register(GroupProtocolHelloPayload.ID, GroupProtocolHelloPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(GroupProtocolAckPayload.ID, GroupProtocolAckPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(GroupDirectoryPayload.ID, GroupDirectoryPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(GroupChatV2Payload.ID, GroupChatV2Payload.CODEC);
+        PayloadTypeRegistry.playC2S().register(GroupHistoryRequestPayload.ID, GroupHistoryRequestPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(GroupHistoryPagePayload.ID, GroupHistoryPagePayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(GroupActionV2Payload.ID, GroupActionV2Payload.CODEC);
+        PayloadTypeRegistry.playS2C().register(GroupDirectoryChunkPayload.ID, GroupDirectoryChunkPayload.CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(MediaUploadPayload.ID, (payload, context) -> {
             ServerPlayerEntity player = context.player();
@@ -164,8 +188,26 @@ public class ChatBubbleMod implements ModInitializer {
 
         ServerPlayNetworking.registerGlobalReceiver(GroupActionPayload.ID, (payload, context) -> {
             ServerPlayerEntity player = context.player();
+            // Pre-2.5 main-channel actions are refused, never honoured: the v1 wire
+            // carries no invitation, so it can never be a public join.
             context.server().execute(() ->
-                com.niuqu.chatbubble.server.GroupManager.handleAction(player, payload.action(), payload.groupName()));
+                com.niuqu.chatbubble.server.GroupManager.handleLegacyAction(
+                    player, payload.action(), payload.groupName()));
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(GroupActionV2Payload.ID, (payload, context) -> {
+            ServerPlayerEntity player = context.player();
+            context.server().execute(() -> GroupActionV2Payload.handleServer(payload, player));
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(GroupProtocolHelloPayload.ID, (payload, context) -> {
+            ServerPlayerEntity player = context.player();
+            context.server().execute(() -> GroupProtocolHelloPayload.handleServer(payload, player));
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(GroupHistoryRequestPayload.ID, (payload, context) -> {
+            ServerPlayerEntity player = context.player();
+            context.server().execute(() -> GroupHistoryRequestPayload.handleServer(payload, player));
         });
 
         // Server-config GUI save: validate, persist to JSON, rebroadcast
@@ -180,12 +222,23 @@ public class ChatBubbleMod implements ModInitializer {
                 ServerConfigSavePayload.handleServer(payload, player, cfg -> {
                     var path = context.server().getSavePath(net.minecraft.util.WorldSavePath.ROOT)
                         .resolve("serverconfig").resolve("e33chat-server.json");
+                    // The GUI manages neither the group limits nor the history/retention
+                    // knobs, so a save carries the on-disk values over instead of
+                    // resetting them to defaults.
+                    ServerConfig onDisk = ServerConfigManager.load(path);
+                    cfg.group_max_count = onDisk.group_max_count;
+                    cfg.group_max_members = onDisk.group_max_members;
+                    cfg.group_create_op_only = onDisk.group_create_op_only;
+                    cfg.group_history_retention_days = onDisk.group_history_retention_days;
+                    cfg.group_history_max_messages = onDisk.group_history_max_messages;
+                    cfg.group_history_max_mib = onDisk.group_history_max_mib;
+                    cfg.group_invite_lifetime_days = onDisk.group_invite_lifetime_days;
                     ServerConfigManager.save(path, cfg);
                     loadConfig(cfg);
                     broadcastServerConfig(context.server());
-                    // Parity with Forge/Neo: toggling groups_enabled must push a
-                    // fresh directory, or online clients keep a stale tab strip.
-                    com.niuqu.chatbubble.server.GroupManager.broadcastGroupList(context.server());
+                    // Parity with Forge/Neo: toggling groups_enabled must push a fresh
+                    // ACK/directory, or online clients keep a stale group tab strip.
+                    com.niuqu.chatbubble.server.GroupManager.broadcastDirectory();
                 });
             });
         });
@@ -240,7 +293,9 @@ public class ChatBubbleMod implements ModInitializer {
             try {
                 // Always sync server-side settings so the client head menu matches the server
                 sendServerConfigTripleTo(handler.player);
-                com.niuqu.chatbubble.server.GroupManager.sendGroupList(handler.player);
+                // Load the per-world group roster before the history filter needs it:
+                // a legacy group row is only authorized against real current membership.
+                com.niuqu.chatbubble.server.GroupManager.onPlayerLogin(handler.player);
             } catch (RuntimeException e) {
                 com.mojang.logging.LogUtils.getLogger().warn(
                     "[e33chat] Server config sync to " + handler.player.getName().getString() + " failed", e);
@@ -249,9 +304,9 @@ public class ChatBubbleMod implements ModInitializer {
             try {
                 if (!historyEnabled) return;
                 List<HistoryPayload.HistoryEntry> snapshot = snapshotHistory();
-                if (!snapshot.isEmpty()) {
-                    ServerPlayNetworking.send(handler.player, new HistoryPayload(snapshot));
-                }
+                com.niuqu.chatbubble.server.PublicHistoryLoginSync.sendOnLogin(handler.player.getUuid(), snapshot,
+                    com.niuqu.chatbubble.server.GroupManager::canReadLegacy,
+                    p -> ServerPlayNetworking.send(handler.player, p));
             } catch (RuntimeException e) {
                 com.mojang.logging.LogUtils.getLogger().warn(
                     "[e33chat] History sync to " + handler.player.getName().getString() + " failed", e);
@@ -260,6 +315,11 @@ public class ChatBubbleMod implements ModInitializer {
 
         // /e33chat template commands + /e33chat gui
         com.niuqu.chatbubble.command.E33ChatCommands.register();
+
+        // Bounded per-tick work: the group backend drops expired invitations (one
+        // sweep per 30 s, not per tick).
+        ServerTickEvents.END_SERVER_TICK.register(server ->
+            com.niuqu.chatbubble.server.GroupManager.onServerTick(server));
 
         // Drop the per-world media store on server stop so the next world (which may
         // be a different save directory) lazily rebuilds it against its own path;
@@ -320,6 +380,10 @@ public class ChatBubbleMod implements ModInitializer {
         groupMaxCount = config.group_max_count != null ? config.group_max_count : 20;
         groupMaxMembers = config.group_max_members != null ? config.group_max_members : 50;
         groupCreateOpOnly = config.group_create_op_only != null && config.group_create_op_only;
+        groupHistoryRetentionDays = config.group_history_retention_days != null ? config.group_history_retention_days : 7;
+        groupHistoryMaxMessages = config.group_history_max_messages != null ? config.group_history_max_messages : 2000;
+        groupHistoryMaxMiB = config.group_history_max_mib != null ? config.group_history_max_mib : 16;
+        groupInviteLifetimeDays = config.group_invite_lifetime_days != null ? config.group_invite_lifetime_days : 7;
         chatTemplates = config.chat_templates != null ? config.chat_templates : List.of();
         whisperTemplates = config.whisper_templates != null ? config.whisper_templates : List.of();
     }
@@ -358,6 +422,10 @@ public class ChatBubbleMod implements ModInitializer {
     public static int groupMaxCount() { return groupMaxCount; }
     public static int groupMaxMembers() { return groupMaxMembers; }
     public static boolean groupCreateOpOnly() { return groupCreateOpOnly; }
+    public static int groupHistoryRetentionDays() { return groupHistoryRetentionDays; }
+    public static int groupHistoryMaxMessages() { return groupHistoryMaxMessages; }
+    public static int groupHistoryMaxMiB() { return groupHistoryMaxMiB; }
+    public static int groupInviteLifetimeDays() { return groupInviteLifetimeDays; }
     public static List<String> chatTemplates() { return chatTemplates; }
     public static List<String> whisperTemplates() { return whisperTemplates; }
     public static void setTemplates(List<String> chat, List<String> whisper, boolean debug) {

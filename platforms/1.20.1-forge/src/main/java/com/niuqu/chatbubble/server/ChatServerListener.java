@@ -52,11 +52,6 @@ public class ChatServerListener {
         return takeQuote(playerUUID);
     }
 
-    /** Group chat path: append an already-built entry (carries the group tag). */
-    public static void addHistoryEntry(HistoryPacket.HistoryEntry entry) {
-        addToHistory(entry);
-    }
-
     @SubscribeEvent
     public void onServerChat(ServerChatEvent event) {
         ServerPlayer player = event.getPlayer();
@@ -153,6 +148,14 @@ public class ChatServerListener {
     }
 
     @SubscribeEvent
+    public void onServerTick(net.minecraftforge.event.TickEvent.ServerTickEvent event) {
+        if (event.phase != net.minecraftforge.event.TickEvent.Phase.END) return;
+        // Bounded per-tick work: the group backend drops expired invitations
+        // (one sweep per 30 s, not per tick).
+        com.niuqu.chatbubble.server.GroupManager.onServerTick(event.getServer());
+    }
+
+    @SubscribeEvent
     public void onPlayerLogout(PlayerEvent.PlayerLoggedOutEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
         com.niuqu.chatbubble.server.DiskMediaStore s = mediaStore;
@@ -201,6 +204,9 @@ public class ChatServerListener {
         try {
             // Always sync server-side settings so the client head menu matches the server
             sendServerConfigTriple(PacketDistributor.PLAYER.with(() -> player));
+            // Load the per-world group roster before the history filter needs it:
+            // a legacy group row is only authorized against real current membership.
+            com.niuqu.chatbubble.server.GroupManager.onPlayerLogin(player);
         } catch (RuntimeException e) {
             com.mojang.logging.LogUtils.getLogger().warn(
                 "[e33chat] Server config sync to " + player.getName().getString() + " failed", e);
@@ -209,10 +215,10 @@ public class ChatServerListener {
         try {
             if (!ChatServerConfig.HISTORY_ENABLED.get()) return;
             List<HistoryPacket.HistoryEntry> snapshot = snapshotHistory();
-            if (!snapshot.isEmpty()) {
-                NetworkHandler.CHANNEL.send(
-                    PacketDistributor.PLAYER.with(() -> player), new HistoryPacket(snapshot));
-            }
+            com.niuqu.chatbubble.server.PublicHistoryLoginSync.sendOnLogin(player.getUUID(), snapshot,
+                com.niuqu.chatbubble.server.GroupManager::canReadLegacy,
+                packet -> NetworkHandler.CHANNEL.send(
+                    PacketDistributor.PLAYER.with(() -> player), packet));
         } catch (RuntimeException e) {
             com.mojang.logging.LogUtils.getLogger().warn(
                 "[e33chat] History sync to " + player.getName().getString() + " failed", e);

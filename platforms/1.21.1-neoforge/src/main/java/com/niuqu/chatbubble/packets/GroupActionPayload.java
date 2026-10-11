@@ -52,7 +52,8 @@ public record GroupActionPayload(int action, String groupName) implements Custom
     public Type<GroupActionPayload> type() { return TYPE; }
 
     public static void handleServer(GroupActionPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> GroupManager.handleAction((ServerPlayer) context.player(), payload.action(), payload.groupName()));
+        context.enqueueWork(() -> GroupManager.handleLegacyAction((ServerPlayer) context.player(),
+            payload.action(), payload.groupName()));
     }
 
     /** Client-side dispatch (callers guarantee a live connection). */

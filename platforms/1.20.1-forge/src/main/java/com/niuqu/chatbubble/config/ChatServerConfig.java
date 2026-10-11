@@ -18,6 +18,10 @@ public class ChatServerConfig {
     public static final ForgeConfigSpec.IntValue GROUP_MAX_COUNT;
     public static final ForgeConfigSpec.IntValue GROUP_MAX_MEMBERS;
     public static final ForgeConfigSpec.BooleanValue GROUP_CREATE_OP_ONLY;
+    public static final ForgeConfigSpec.IntValue GROUP_HISTORY_RETENTION_DAYS;
+    public static final ForgeConfigSpec.IntValue GROUP_HISTORY_MAX_MESSAGES;
+    public static final ForgeConfigSpec.IntValue GROUP_HISTORY_MAX_MIB;
+    public static final ForgeConfigSpec.IntValue GROUP_INVITE_LIFETIME_DAYS;
 
     static {
         ForgeConfigSpec.Builder builder = new ForgeConfigSpec.Builder();
@@ -67,6 +71,18 @@ public class ChatServerConfig {
         GROUP_CREATE_OP_ONLY = builder
             .comment("When true, only operators (permission level 2+) can create groups")
             .define("group_create_op_only", false);
+        GROUP_HISTORY_RETENTION_DAYS = builder
+            .comment("Maximum age in days for retained group chat history")
+            .defineInRange("group_history_retention_days", 7, 1, 3650);
+        GROUP_HISTORY_MAX_MESSAGES = builder
+            .comment("Global retained group-history row limit across all groups")
+            .defineInRange("group_history_max_messages", 2000, 1, 1000000);
+        GROUP_HISTORY_MAX_MIB = builder
+            .comment("Global group-history data limit in MiB; metadata index is additional")
+            .defineInRange("group_history_max_mib", 16, 1, 4096);
+        GROUP_INVITE_LIFETIME_DAYS = builder
+            .comment("Invitation lifetime in days")
+            .defineInRange("group_invite_lifetime_days", 7, 1, 3650);
         SERVER_CONFIG = builder.build();
     }
 }

@@ -4,6 +4,7 @@ import com.niuqu.chatbubble.ChatBubbleMod;
 import com.niuqu.chatbubble.chat.TemplateMatcher;
 import com.niuqu.chatbubble.config.ServerConfig;
 import com.niuqu.chatbubble.config.ServerConfigManager;
+import com.niuqu.chatbubble.group.GroupRules;
 import com.niuqu.chatbubble.network.ServerConfigScreenPayload;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
@@ -77,34 +78,48 @@ public class E33ChatCommands {
         });
     }
 
-    /** Player-facing group management + the client's silent say entry (2.4.10).
+    /** Player-facing group management + the client's silent say entry (2.5.0).
      *
-     * <p>All name/text arguments are {@code greedyString}: Brigadier's
+     * <p>Every name/text argument is {@code greedyString}: Brigadier's
      * {@code string()} (QUOTABLE_PHRASE) only accepts {@code [0-9A-Za-z_.-]}
      * unquoted, so a CJK group name like 妈妈 parsed as an empty word plus
      * trailing data and the command was rejected with "Expected whitespace to
-     * end one argument". Greedy reads the whole remainder instead; group names
-     * can never contain whitespace (server validation), so {@code msg} takes a
-     * single rest argument and splits it at the first space.
+     * end one argument". Greedy reads the whole remainder instead; group
+     * references, player names and group names never contain whitespace, so a
+     * two-part argument is split at its first space.
+     *
+     * <p>These are the same lifecycle actions the client sends over
+     * {@code e33chat:group_action_v2}; the command layer only resolves a group
+     * reference/id and a player name to UUIDs, the server re-authorizes anyway.
      */
     private static com.mojang.brigadier.builder.LiteralArgumentBuilder<ServerCommandSource> groupCommands() {
         var cm = net.minecraft.server.command.CommandManager.literal("group");
-        cm.then(net.minecraft.server.command.CommandManager.literal("list")
-            .executes(ctx -> groupList(ctx.getSource())));
-        cm.then(net.minecraft.server.command.CommandManager.literal("create")
-            .then(net.minecraft.server.command.CommandManager.argument("name", StringArgumentType.greedyString())
-                .executes(ctx -> groupCreate(ctx.getSource(), greedyName(ctx, "name")))));
-        cm.then(net.minecraft.server.command.CommandManager.literal("join")
-            .then(net.minecraft.server.command.CommandManager.argument("name", StringArgumentType.greedyString())
-                .executes(ctx -> groupJoin(ctx.getSource(), greedyName(ctx, "name")))));
-        cm.then(net.minecraft.server.command.CommandManager.literal("leave")
-            .then(net.minecraft.server.command.CommandManager.argument("name", StringArgumentType.greedyString())
-                .executes(ctx -> groupLeave(ctx.getSource(), greedyName(ctx, "name")))));
-        cm.then(net.minecraft.server.command.CommandManager.literal("delete")
-            .then(net.minecraft.server.command.CommandManager.argument("name", StringArgumentType.greedyString())
-                .executes(ctx -> groupDelete(ctx.getSource(), greedyName(ctx, "name")))));
-        cm.then(net.minecraft.server.command.CommandManager.literal("msg")
-            .then(net.minecraft.server.command.CommandManager.argument("rest", StringArgumentType.greedyString())
+        cm.then(literal("list").executes(ctx -> groupList(ctx.getSource())));
+        cm.then(literal("create")
+            .then(argument("name")
+                .executes(ctx -> groupAction(ctx.getSource(), GroupRules.CREATE, null,
+                    GroupRules.NO_SUBJECT, GroupRules.NO_SUBJECT, greedy(ctx, "name")))));
+        cm.then(pairCommand("invite", GroupRules.INVITE));
+        cm.then(literal("accept")
+            .then(argument("group")
+                .executes(ctx -> groupInviteAction(ctx, true))));
+        cm.then(literal("reject")
+            .then(argument("group")
+                .executes(ctx -> groupInviteAction(ctx, false))));
+        cm.then(pairCommand("revoke", -1));
+        cm.then(literal("leave")
+            .then(argument("group")
+                .executes(ctx -> groupAction(ctx.getSource(), GroupRules.LEAVE, greedy(ctx, "group"),
+                    GroupRules.NO_SUBJECT, GroupRules.NO_SUBJECT, ""))));
+        cm.then(pairCommand("rename", GroupRules.RENAME));
+        cm.then(pairCommand("kick", GroupRules.KICK));
+        cm.then(pairCommand("transfer", GroupRules.TRANSFER_OWNER));
+        cm.then(literal("disband")
+            .then(argument("group")
+                .executes(ctx -> groupAction(ctx.getSource(), GroupRules.DISBAND, greedy(ctx, "group"),
+                    GroupRules.NO_SUBJECT, GroupRules.NO_SUBJECT, ""))));
+        cm.then(literal("msg")
+            .then(argument("rest")
                 .executes(ctx -> {
                     String[] parts = com.niuqu.chatbubble.server.GroupManager.splitSay(
                         StringArgumentType.getString(ctx, "rest"));
@@ -113,8 +128,26 @@ public class E33ChatCommands {
         return cm;
     }
 
-    /** Trim the greedy name argument; names with inner whitespace fail validation. */
-    private static String greedyName(com.mojang.brigadier.context.CommandContext<ServerCommandSource> ctx, String key) {
+    /** {@code <group> <second>} as one greedy argument, split at the first space. */
+    private static com.mojang.brigadier.builder.LiteralArgumentBuilder<ServerCommandSource> pairCommand(
+            String name, int action) {
+        return literal(name).then(argument("rest")
+            .executes(ctx -> {
+                String[] parts = com.niuqu.chatbubble.server.GroupManager.splitSay(greedy(ctx, "rest"));
+                return groupPairAction(ctx.getSource(), action, parts[0], parts[1]);
+            }));
+    }
+
+    private static com.mojang.brigadier.builder.LiteralArgumentBuilder<ServerCommandSource> literal(String name) {
+        return net.minecraft.server.command.CommandManager.literal(name);
+    }
+
+    private static com.mojang.brigadier.builder.RequiredArgumentBuilder<ServerCommandSource, String> argument(
+            String name) {
+        return net.minecraft.server.command.CommandManager.argument(name, StringArgumentType.greedyString());
+    }
+
+    private static String greedy(com.mojang.brigadier.context.CommandContext<ServerCommandSource> ctx, String key) {
         return StringArgumentType.getString(ctx, key).trim();
     }
 
@@ -122,62 +155,128 @@ public class E33ChatCommands {
         return src.getPlayer();
     }
 
+    /** The caller's own groups and live invitations — never the whole server roster. */
     private static int groupList(ServerCommandSource src) {
-        var p = src.getPlayer();
+        var p = playerOrNull(src);
         if (p == null) {
             src.sendError(Text.translatable("e33chat.server.console_only"));
             return 0;
         }
-        var groups = com.niuqu.chatbubble.server.GroupManager.snapshot();
-        if (groups.isEmpty()) {
+        var groups = com.niuqu.chatbubble.server.GroupManager.groupsOf(p.getUuid());
+        var invitations = com.niuqu.chatbubble.server.GroupManager.invitationsOf(p.getUuid());
+        if (groups.isEmpty() && invitations.isEmpty()) {
             src.sendFeedback(() -> Text.translatable("e33chat.group.list_empty"), false);
             return 1;
         }
-        final int size = groups.size();
-        src.sendFeedback(() -> Text.translatable("e33chat.group.list_header", size), false);
-        for (var e : groups.entrySet()) {
-            String gname = e.getKey();
-            boolean member = com.niuqu.chatbubble.server.GroupManager.isMember(gname, p.getUuid());
-            int count = e.getValue().members.size();
-            src.sendFeedback(() -> Text.translatable(member
-                ? "e33chat.group.list_entry_joined" : "e33chat.group.list_entry",
-                gname, count), false);
+        src.sendFeedback(() -> Text.translatable("e33chat.group.my_groups_count", groups.size()), false);
+        for (var record : groups) {
+            String name = record.identity().displayName();
+            int count = record.access().visibleFromSequence().size();
+            src.sendFeedback(() -> Text.translatable("e33chat.group.list_entry_joined", name, count), false);
+        }
+        if (!invitations.isEmpty()) {
+            src.sendFeedback(() -> Text.translatable("e33chat.group.my_invites_header", invitations.size()), false);
+            for (var invitation : invitations) {
+                String name = invitation.groupName();
+                String inviter = com.niuqu.chatbubble.server.GroupManager.playerName(invitation.inviterId());
+                src.sendFeedback(() -> Text.translatable("e33chat.group.invite_entry", name, inviter), false);
+            }
         }
         return 1;
     }
 
-    private static int groupCreate(ServerCommandSource src, String name) {
+    /** create / leave / disband: one group reference, no second argument. */
+    private static int groupAction(ServerCommandSource src, int action, String reference,
+                                   java.util.UUID subjectId, java.util.UUID invitationId, String value) {
         var p = playerOrNull(src);
         if (p == null) { src.sendError(Text.translatable("e33chat.server.console_only")); return 0; }
-        com.niuqu.chatbubble.server.GroupManager.create(p, name);
+        java.util.UUID groupId = GroupRules.NO_SUBJECT;
+        if (reference != null) {
+            var resolved = com.niuqu.chatbubble.server.GroupManager.resolveGroupId(reference);
+            if (resolved == null) {
+                src.sendError(Text.translatable("e33chat.group.missing", reference));
+                return 0;
+            }
+            groupId = resolved;
+        }
+        com.niuqu.chatbubble.server.GroupManager.applyAction(p, action, groupId, subjectId, invitationId, value);
         return 1;
     }
 
-    private static int groupJoin(ServerCommandSource src, String name) {
+    /** invite / rename / kick / transfer / revoke: a group reference plus a player or a new name. */
+    private static int groupPairAction(ServerCommandSource src, int action, String reference, String second) {
         var p = playerOrNull(src);
         if (p == null) { src.sendError(Text.translatable("e33chat.server.console_only")); return 0; }
-        com.niuqu.chatbubble.server.GroupManager.join(p, name);
-        return 1;
+        var groupId = com.niuqu.chatbubble.server.GroupManager.resolveGroupId(reference);
+        if (groupId == null) {
+            src.sendError(Text.translatable("e33chat.group.missing", reference));
+            return 0;
+        }
+        if (action == GroupRules.RENAME) {
+            return groupAction(src, GroupRules.RENAME, reference, GroupRules.NO_SUBJECT,
+                GroupRules.NO_SUBJECT, second);
+        }
+        var subject = resolvePlayer(src, second);
+        if (subject == null) return 0;
+        if (action == -1) {   // revoke: find the invitee's live invitation in that group
+            var invitationId = com.niuqu.chatbubble.server.GroupManager.invitationIdFor(groupId, subject);
+            if (invitationId == null) {
+                src.sendError(Text.translatable("e33chat.group.invite_gone"));
+                return 0;
+            }
+            return groupAction(src, GroupRules.REVOKE, reference, GroupRules.NO_SUBJECT, invitationId, "");
+        }
+        return groupAction(src, action, reference, subject, GroupRules.NO_SUBJECT, "");
     }
 
-    private static int groupLeave(ServerCommandSource src, String name) {
+    /** accept / reject: the caller's own live invitation in the named group. */
+    private static int groupInviteAction(com.mojang.brigadier.context.CommandContext<ServerCommandSource> ctx,
+                                         boolean accept) {
+        var src = ctx.getSource();
         var p = playerOrNull(src);
         if (p == null) { src.sendError(Text.translatable("e33chat.server.console_only")); return 0; }
-        com.niuqu.chatbubble.server.GroupManager.leave(p, name);
-        return 1;
+        String reference = greedy(ctx, "group");
+        var groupId = com.niuqu.chatbubble.server.GroupManager.resolveGroupId(reference);
+        if (groupId == null) {
+            src.sendError(Text.translatable("e33chat.group.missing", reference));
+            return 0;
+        }
+        var invitationId = com.niuqu.chatbubble.server.GroupManager.invitationIdFor(groupId, p.getUuid());
+        if (invitationId == null) {
+            src.sendError(Text.translatable("e33chat.group.invite_gone"));
+            return 0;
+        }
+        return groupAction(src, accept ? GroupRules.ACCEPT : GroupRules.REJECT, null,
+            GroupRules.NO_SUBJECT, invitationId, "");
     }
 
-    private static int groupDelete(ServerCommandSource src, String name) {
-        var p = playerOrNull(src);
-        if (p == null) { src.sendError(Text.translatable("e33chat.server.console_only")); return 0; }
-        com.niuqu.chatbubble.server.GroupManager.delete(p, name);
-        return 1;
+    /**
+     * Command-side target resolution: the local failure messages stay here, the
+     * lookup itself is {@link com.niuqu.chatbubble.server.GroupManager#resolvePlayerId}
+     * so commands and the GUI's wire invite share one implementation.
+     */
+    private static java.util.UUID resolvePlayer(ServerCommandSource src, String nameOrId) {
+        if (nameOrId == null || nameOrId.isEmpty()) {
+            src.sendError(Text.translatable("e33chat.group.no_target"));
+            return null;
+        }
+        java.util.UUID resolved =
+            com.niuqu.chatbubble.server.GroupManager.resolvePlayerId(src.getServer(), nameOrId);
+        if (resolved == null) {
+            src.sendError(Text.translatable("e33chat.group.player_unknown", nameOrId));
+        }
+        return resolved;
     }
 
-    private static int groupSay(ServerCommandSource src, String name, String text) {
+    private static int groupSay(ServerCommandSource src, String reference, String text) {
         var p = playerOrNull(src);
         if (p == null) { src.sendError(Text.translatable("e33chat.server.console_only")); return 0; }
-        com.niuqu.chatbubble.server.GroupManager.say(p, name, text);
+        var groupId = com.niuqu.chatbubble.server.GroupManager.resolveGroupId(reference);
+        if (groupId == null) {
+            src.sendError(Text.translatable("e33chat.group.missing", reference));
+            return 0;
+        }
+        com.niuqu.chatbubble.server.GroupManager.say(p, groupId, text);
         return 1;
     }
 
@@ -322,6 +421,14 @@ public class E33ChatCommands {
         cfg.group_max_count = ChatBubbleMod.groupMaxCount();
         cfg.group_max_members = ChatBubbleMod.groupMaxMembers();
         cfg.group_create_op_only = ChatBubbleMod.groupCreateOpOnly();
+        // The 2.5 group-history/invite knobs are not managed by this command; Gson
+        // omits null fields, so saving a snapshot that never lifted them would reset
+        // them to defaults on the next load (the GUI save path carries them over for
+        // the same reason).
+        cfg.group_history_retention_days = ChatBubbleMod.groupHistoryRetentionDays();
+        cfg.group_history_max_messages = ChatBubbleMod.groupHistoryMaxMessages();
+        cfg.group_history_max_mib = ChatBubbleMod.groupHistoryMaxMiB();
+        cfg.group_invite_lifetime_days = ChatBubbleMod.groupInviteLifetimeDays();
         ServerConfigManager.save(path, cfg);
         ChatBubbleMod.broadcastServerConfig(server);
     }

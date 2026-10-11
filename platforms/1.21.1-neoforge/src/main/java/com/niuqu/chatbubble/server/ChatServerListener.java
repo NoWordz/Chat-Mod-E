@@ -119,6 +119,9 @@ public class ChatServerListener {
         try {
             // Always sync server-side settings so the client head menu matches the server
             sendServerConfigTripleTo(player);
+            // Load the per-world group roster before the history filter needs it:
+            // a legacy group row is only authorized against real current membership.
+            com.niuqu.chatbubble.server.GroupManager.onPlayerLogin(player);
         } catch (RuntimeException e) {
             com.mojang.logging.LogUtils.getLogger().warn(
                 "[e33chat] Server config sync to " + player.getName().getString() + " failed", e);
@@ -127,9 +130,9 @@ public class ChatServerListener {
         try {
             if (!ChatServerConfig.HISTORY_ENABLED.get()) return;
             List<HistoryPayload.HistoryEntry> snapshot = snapshotHistory();
-            if (!snapshot.isEmpty()) {
-                PacketDistributor.sendToPlayer(player, new HistoryPayload(snapshot));
-            }
+            com.niuqu.chatbubble.server.PublicHistoryLoginSync.sendOnLogin(player.getUUID(), snapshot,
+                com.niuqu.chatbubble.server.GroupManager::canReadLegacy,
+                payload -> PacketDistributor.sendToPlayer(player, payload));
         } catch (RuntimeException e) {
             com.mojang.logging.LogUtils.getLogger().warn(
                 "[e33chat] History sync to " + player.getName().getString() + " failed", e);
@@ -165,7 +168,7 @@ public class ChatServerListener {
         com.niuqu.chatbubble.server.DiskMediaStore s = mediaStore;
         if (s != null) s.discardAllUploads();
         mediaStore = null;
-        com.niuqu.chatbubble.server.GroupManager.onServerStopping();
+        com.niuqu.chatbubble.server.GroupManager.onServerStopping(event.getServer());
         // Singleplayer world switches reuse this JVM: stale quotes could
         // attach to messages in the next world and the backlog would be
         // delivered as "history" there.
@@ -180,6 +183,13 @@ public class ChatServerListener {
     public void onServerStarted(net.neoforged.neoforge.event.server.ServerStartedEvent event) {
         // One cleanup per boot: drop media files past the 7-day TTL (config-gated).
         if (ChatServerConfig.MEDIA_AUTO_CLEAN.get()) mediaStore().cleanupExpired();
+    }
+
+    @SubscribeEvent
+    public void onServerTick(net.neoforged.neoforge.event.tick.ServerTickEvent.Post event) {
+        // Bounded per-tick work: the group backend drops expired invitations
+        // (one sweep per 30 s, not per tick).
+        com.niuqu.chatbubble.server.GroupManager.onServerTick(event.getServer());
     }
 
     @SubscribeEvent

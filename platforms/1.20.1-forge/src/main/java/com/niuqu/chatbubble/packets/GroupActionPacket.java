@@ -52,7 +52,7 @@ public class GroupActionPacket {
         ctx.get().enqueueWork(() -> {
             ServerPlayer player = ctx.get().getSender();
             if (player != null) {
-                GroupManager.handleAction(player, action, groupName);
+                GroupManager.handleLegacyAction(player, action, groupName);
             }
         });
         ctx.get().setPacketHandled(true);

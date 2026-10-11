@@ -19,6 +19,11 @@ public class ServerConfig {
     public Integer group_max_count;
     public Integer group_max_members;
     public Boolean group_create_op_only;
+    /** null in old files = absent → defaults (7 days / 2000 rows / 16 MiB / 7 days). */
+    public Integer group_history_retention_days;
+    public Integer group_history_max_messages;
+    public Integer group_history_max_mib;
+    public Integer group_invite_lifetime_days;
 
     public static ServerConfig defaults() {
         ServerConfig c = new ServerConfig();
@@ -31,6 +36,10 @@ public class ServerConfig {
         c.media_auto_clean = true;
         c.easy_bot_compat = true;
         c.groups_enabled = true;
+        c.group_history_retention_days = 7;
+        c.group_history_max_messages = 2000;
+        c.group_history_max_mib = 16;
+        c.group_invite_lifetime_days = 7;
         return c;
     }
 }

@@ -1,0 +1,57 @@
+package com.niuqu.chatbubble.network;
+
+import com.niuqu.chatbubble.server.GroupManager;
+import java.util.UUID;
+import net.minecraft.network.Connection;
+import net.minecraft.network.protocol.PacketFlow;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * The groups channel keeps a static player -&gt; connection map whose only other
+ * cleanup path lives inside {@code send()} for a still-online player. These
+ * regressions drive the real lifecycle hooks and assert that map itself (not a
+ * copy, not a source-text check): a closed connection must not be retained, and a
+ * singleplayer world switch stops the server while keeping the JVM alive.
+ */
+class GroupNetworkHandlerLifecycleTest {
+
+    @AfterEach
+    void noRetainedConnections() {
+        GroupNetworkHandler.clearV2Connections();
+    }
+
+    @Test
+    void logoutDropsThatPlayersConnectionOnly() {
+        UUID leaving = UUID.randomUUID();
+        UUID staying = UUID.randomUUID();
+        Connection left = new Connection(PacketFlow.CLIENTBOUND);
+        Connection kept = new Connection(PacketFlow.CLIENTBOUND);
+        GroupNetworkHandler.trackV2Connection(leaving, left);
+        GroupNetworkHandler.trackV2Connection(staying, kept);
+        assertSame(left, GroupNetworkHandler.v2Connections.get(leaving));
+
+        GroupManager.onPlayerLoggedOut(leaving);
+
+        assertFalse(GroupNetworkHandler.v2Connections.containsKey(leaving),
+            "a logged-out player's closed connection must not stay reachable until the JVM exits");
+        assertSame(kept, GroupNetworkHandler.v2Connections.get(staying),
+            "another player's retained connection is untouched");
+    }
+
+    @Test
+    void serverStopDropsEveryRetainedConnection() {
+        GroupNetworkHandler.trackV2Connection(UUID.randomUUID(), new Connection(PacketFlow.CLIENTBOUND));
+        GroupNetworkHandler.trackV2Connection(UUID.randomUUID(), new Connection(PacketFlow.SERVERBOUND));
+        assertFalse(GroupNetworkHandler.v2Connections.isEmpty());
+
+        GroupManager.onServerStopping();
+
+        assertTrue(GroupNetworkHandler.v2Connections.isEmpty(),
+            "a stopped world must not leave its connections pinned in the static map");
+    }
+}

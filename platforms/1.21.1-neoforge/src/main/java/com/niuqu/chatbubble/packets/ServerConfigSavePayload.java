@@ -87,7 +87,7 @@ public record ServerConfigSavePayload(boolean useTpa, boolean historyEnabled, bo
             ChatServerConfig.GROUPS_ENABLED.clearCache();
             ChatBubbleMod.saveServerConfig();
             ChatServerListener.broadcastServerConfig();
-            com.niuqu.chatbubble.server.GroupManager.broadcastGroupList();
+            com.niuqu.chatbubble.server.GroupManager.broadcastDirectory();
             player.sendSystemMessage(Component.translatable("e33chat.server.saved"));
         });
     }
