@@ -100,13 +100,42 @@ public class ChatBubbleClientListener {
         ChatBubbleHudOverlay.render(event.getGuiGraphics());
     }
 
+    /**
+     * The two login sends, resolved at call time. Kept as package-visible fields
+     * (not direct calls in the hook) so a unit test can drive the real
+     * {@link #onLoggingIn} hook and observe BOTH hellos without a live connection.
+     */
+    static Runnable helloV1Sender = com.niuqu.chatbubble.packets.ClientHelloPacket::send;
+    static Runnable helloV2Sender = com.niuqu.chatbubble.packets.GroupProtocolHelloPacket::send;
+
     @SubscribeEvent
     public void onLoggingIn(net.minecraftforge.client.event.ClientPlayerNetworkEvent.LoggingIn event) {
         // Fresh server = fresh group state; then announce the mod so the
         // server routes group chat as packets and pushes the group directory.
         com.niuqu.chatbubble.chat.GroupChannelState.reset();
         com.niuqu.chatbubble.store.ChatMessageStore.clearSeenPlayers();
-        com.niuqu.chatbubble.packets.ClientHelloPacket.send();
+        announceToServer();
+    }
+
+    /**
+     * The login announce. Both hellos must go out on every login: the v1 hello
+     * routes the 2.4.x group chat, and the v2 offer on its own channel is what
+     * makes the server push the recipient-scoped directory the group browser
+     * needs. Without the v2 offer the server never adds this player to
+     * {@code groupV2Clients}, so {@code GroupManager.sendDirectory} returns early
+     * and creating a group is a silent no-op (the M5 regression).
+     *
+     * <p>{@link com.niuqu.chatbubble.packets.GroupProtocolHelloPacket#send()} gates
+     * itself on the peer's negotiated channels — Forge's
+     * {@code SimpleChannel#isRemotePresent} is a plain boolean, so an unnegotiated
+     * peer simply drops the send and no outer guard is needed (unlike NeoForge,
+     * where an unnegotiated send hard-throws).
+     */
+    static void announceToServer() {
+        // Forge's SimpleChannel#isRemotePresent is a plain boolean and
+        // GroupProtocolHelloPacket.send() already drops an unnegotiated send, so the
+        // v2 offer is always attempted; the shared gate carries the decision shape.
+        com.niuqu.chatbubble.network.LoginHandshake.announce(true, helloV1Sender, helloV2Sender);
     }
 
     @SubscribeEvent

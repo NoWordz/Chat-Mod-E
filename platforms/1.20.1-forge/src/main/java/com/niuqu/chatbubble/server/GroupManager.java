@@ -66,8 +66,14 @@ public final class GroupManager {
 
     /** The one authoritative roster/invitation snapshot; replaced only after a write succeeds. */
     private static GroupFileStore.Snapshot state = new GroupFileStore.Snapshot(Map.of(), Map.of());
-    /** Connections that completed the {@code e33chat:groups} handshake. */
-    private static final Set<UUID> groupV2Clients = new LinkedHashSet<>();
+    /**
+     * Connections that completed the {@code e33chat:groups} handshake. This set is
+     * also the gate {@link #sendDirectory(ServerPlayer)} checks first, so it is the
+     * single thing standing between a logged-in client and a group directory — the
+     * handshake test asserts this exact set rather than a copy. Package-visible so
+     * that test can drive the real transition and read it back.
+     */
+    static final Set<UUID> groupV2Clients = new LinkedHashSet<>();
     private static final Map<UUID, Long> lastSay = new HashMap<>();
     private static GroupFileStore groupFileStore;
     private static GroupHistoryStore groupHistoryStore;
@@ -231,17 +237,32 @@ public final class GroupManager {
         if (player == null) return;
         MinecraftServer server = player.getServer();
         if (server != null) ensureLoaded(server);
-        if (protocol != PROTOCOL_VERSION) {
+        if (!registerV2Client(player.getUUID(), protocol)) {
             // A newer dialect is refused: the peer keeps its own state and gets no
             // directory. It is not a 2.4.x client, so no v1 fallback applies.
-            groupV2Clients.remove(player.getUUID());
             GroupNetworkHandler.sendAck(player, protocol, false);
             return;
         }
-        groupV2Clients.add(player.getUUID());
         boolean enabled = ChatServerConfig.GROUPS_ENABLED.get();
         GroupNetworkHandler.sendAck(player, PROTOCOL_VERSION, enabled);
         if (enabled) sendDirectory(player);
+    }
+
+    /**
+     * The HELLO's membership step, isolated from the live-server sends so the
+     * handshake contract is unit-testable: an accepted protocol registers the
+     * connection in {@link #groupV2Clients} (the exact set {@link
+     * #sendDirectory(ServerPlayer)} gates on), any other offer forgets it, and a
+     * null id is ignored. Returns whether the offered dialect was accepted.
+     */
+    static boolean registerV2Client(UUID playerId, int protocol) {
+        if (playerId == null) return false;
+        if (protocol != PROTOCOL_VERSION) {
+            groupV2Clients.remove(playerId);
+            return false;
+        }
+        groupV2Clients.add(playerId);
+        return true;
     }
 
     /**
