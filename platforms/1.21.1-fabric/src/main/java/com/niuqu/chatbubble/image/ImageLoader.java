@@ -3,8 +3,6 @@ package com.niuqu.chatbubble.image;
 import com.mojang.logging.LogUtils;
 import java.net.URI;
 import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -55,7 +53,11 @@ public final class ImageLoader {
     private static final HttpClient CLIENT = HttpClient.newBuilder()
         .version(HttpClient.Version.HTTP_1_1)
         .connectTimeout(Duration.ofSeconds(8))
-        .followRedirects(HttpClient.Redirect.NORMAL)
+        // Redirects are followed by SafeHttpFetch, which re-runs the SSRF policy
+        // on every hop. Letting the client follow them implicitly bypassed the
+        // guard: a 302 to http://127.0.0.1/ was chased straight to the LAN
+        // (audit SEC-1/B8).
+        .followRedirects(HttpClient.Redirect.NEVER)
         .build();
 
     /** Shared HTTP client (also used by ImageUploader). */
@@ -171,12 +173,8 @@ public final class ImageLoader {
                     url.substring("e33chat://media/".length()));
         }
         if (!lower.startsWith("http://") && !lower.startsWith("https://")) return false;
-        try {
-            URI uri = new URI(url);
-            return uri.getHost() != null;
-        } catch (Exception e) {
-            return false;
-        }
+        // http/https only, and never a loopback/private/link-local host (SSRF guard).
+        return MediaUrlPolicy.isFetchable(url);
     }
 
     /** Pure size math for scaling (unit-testable). */
@@ -274,13 +272,14 @@ public final class ImageLoader {
                     return;
                 }
             } else {
-                HttpResponse<byte[]> resp = CLIENT.send(
-                    HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS)).build(),
-                    HttpResponse.BodyHandlers.ofByteArray());
+                // Redirects are followed here, policy-checked on every hop, so a
+                // 302 to a loopback/private host cannot slip past the guard.
+                SafeHttpFetch.Response resp = SafeHttpFetch.fetch(
+                    CLIENT, URI.create(url), Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS), MAX_RECEIVE_BYTES);
                 t1 = System.currentTimeMillis();
-                if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
-                    entry.markFailed("http " + resp.statusCode());
-                    LOGGER.info("[e33chat] image fetch {} -> HTTP {} ({}ms)", url, resp.statusCode(), t1 - t0);
+                if (resp.status() < 200 || resp.status() >= 300) {
+                    entry.markFailed("http " + resp.status());
+                    LOGGER.info("[e33chat] image fetch {} -> HTTP {} ({}ms)", url, resp.status(), t1 - t0);
                     return;
                 }
                 body = resp.body();

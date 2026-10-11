@@ -193,22 +193,30 @@ public final class AnimatedImageLoader {
         return lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".bmp");
     }
 
-    /** Extension-gated entry; null when the URL gives no animation hint. */
+    /** Extension-gated entry; null when the URL gives no animation hint. Remote
+     *  URLs are additionally scheme/host filtered (see {@link MediaUrlPolicy});
+     *  a rejected URL falls back to the static loader, which rejects it too. */
     public static Entry getOrLoad(String url, String nameHint) {
         if (url == null || url.isBlank() || !looksAnimated(url, nameHint)) return null;
+        if (!MediaUrlPolicy.isFetchable(url)) return null;
         return cachedOrStart(url);
     }
 
     /** Content-probe path for extension-less transports (e33chat://media). */
     public static Entry getOrLoadAny(String url, String nameHint) {
         if (url == null || url.isBlank()) return null;
+        if (!MediaUrlPolicy.isFetchable(url)) return null;
         return cachedOrStart(url);
     }
 
-    /** Local file (custom emotes); the filename extension gates the probe. */
+    /** Local file (custom emotes); the filename extension gates the probe. This is
+     *  the only path allowed to read a {@code file:} URL — remote chat content
+     *  must not reach {@link #load} with one. */
     public static Entry getOrLoadFile(java.io.File file) {
         if (file == null || !file.isFile()) return null;
-        return getOrLoad(file.toURI().toString(), file.getName());
+        String url = file.toURI().toString();
+        if (!looksAnimated(url, file.getName())) return null;
+        return cachedOrStart(url);
     }
 
     /** Client tick: advance all live entries. */
@@ -304,19 +312,25 @@ public final class AnimatedImageLoader {
                     return;
                 }
             } else {
+                // Scheme + host guard: never fetch file:/UNC or a loopback/private
+                // host, even if one slipped past the entry points. SafeHttpFetch
+                // re-runs the policy on every redirect hop (audit SEC-1/B8).
+                if (!MediaUrlPolicy.isFetchable(entry.url)) {
+                    entry.markFailed();
+                    LOGGER.info("[e33chat] animated image fetch blocked: {}", entry.url);
+                    return;
+                }
                 // Raw non-ASCII (Chinese filenames) must go through the ASCII
                 // URI form or HttpClient can fail before any network I/O.
                 URI requestUri = URI.create(URI.create(entry.url).toASCIIString());
-                HttpResponse<byte[]> response = ImageLoader.client().send(
-                    HttpRequest.newBuilder(requestUri)
-                        .timeout(Duration.ofSeconds(30)).build(),
-                    HttpResponse.BodyHandlers.ofByteArray());
-                bytes = response.statusCode() >= 200 && response.statusCode() < 300
+                SafeHttpFetch.Response response = SafeHttpFetch.fetch(
+                    ImageLoader.client(), requestUri, Duration.ofSeconds(30), MAX_BYTES);
+                bytes = response.status() >= 200 && response.status() < 300
                     ? response.body() : null;
                 if (bytes == null) {
                     entry.markFailed();
                     LOGGER.info("[e33chat] animated image fetch failed: {} (HTTP {})",
-                        entry.url, response.statusCode());
+                        entry.url, response.status());
                     return;
                 }
             }

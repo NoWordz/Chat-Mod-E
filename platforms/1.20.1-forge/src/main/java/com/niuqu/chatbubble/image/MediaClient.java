@@ -8,7 +8,6 @@ import com.niuqu.chatbubble.packets.MediaResponsePacket;
 import com.niuqu.chatbubble.packets.MediaUploadAckPacket;
 import com.niuqu.chatbubble.packets.MediaUploadPacket;
 import com.niuqu.chatbubble.server.DiskMediaStore;
-import net.minecraftforge.network.NetworkEvent;
 import org.slf4j.Logger;
 
 import java.util.Map;
@@ -16,7 +15,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Supplier;
 
 /**
  * Client side of the server media hosting feature (2.3.13).
@@ -29,6 +27,13 @@ import java.util.function.Supplier;
  * Both upload and fetch are blocking with a 30s timeout and must be called on
  * a worker thread (not the render thread). Replies are matched by uploadId /
  * mediaId futures.
+ *
+ * <p>Chunk packets are untrusted input: the sender is the remote server. An
+ * assembly is only created for a media id the client actually requested (kept
+ * in {@link #FETCHES}), so a hostile server can no longer pin {@code
+ * MAX_ACTIVE_ASSEMBLIES} zombie assemblies and permanently refuse every later
+ * fetch (2.5.0 media audit M12/L9). Assemblies past their idle window are swept
+ * by a janitor, and the per-id byte budget caps what one id may accumulate.
  */
 public final class MediaClient {
     private static final Logger LOGGER = LogUtils.getLogger();
@@ -39,6 +44,29 @@ public final class MediaClient {
     private static final Map<String, CompletableFuture<byte[]>> FETCHES = new ConcurrentHashMap<>();
     private static final Map<String, byte[][]> FETCH_BUFFERS = new ConcurrentHashMap<>();
     private static final Map<String, Integer> FETCH_COUNTS = new ConcurrentHashMap<>();
+
+    // Reassembly bounds for a hostile/compromised server: chunk packets can name
+    // any valid media id, so cap how many assemblies may coexist, how many bytes
+    // one id may accumulate, and how long a silent assembly may linger.
+    private static final int MAX_ACTIVE_ASSEMBLIES = 16;
+    private static final long MAX_ASSEMBLY_BYTES = DiskMediaStore.MAX_SINGLE_BYTES;
+    private static final long ASSEMBLY_IDLE_MILLIS = 60_000;
+    private static final Map<String, Long> FETCH_BYTES = new ConcurrentHashMap<>();
+    private static final Map<String, Long> FETCH_TOUCH = new ConcurrentHashMap<>();
+    private static final java.util.concurrent.ScheduledExecutorService JANITOR =
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "e33chat-media-janitor");
+            t.setDaemon(true);
+            return t;
+        });
+
+    static {
+        JANITOR.scheduleWithFixedDelay(MediaClient::dropIdleAssemblies,
+            ASSEMBLY_IDLE_MILLIS, ASSEMBLY_IDLE_MILLIS, TimeUnit.MILLISECONDS);
+    }
+
+    /** What feeding one wire chunk into the reassembly state did. */
+    enum ChunkOutcome { UNREQUESTED, ASSEMBLING, COMPLETE, REJECTED }
 
     /**
      * What we uploaded, kept locally so we never have to download it back.
@@ -87,42 +115,105 @@ public final class MediaClient {
     private static void failFetch(String id, String message) {
         FETCH_BUFFERS.remove(id);
         FETCH_COUNTS.remove(id);
+        FETCH_BYTES.remove(id);
+        FETCH_TOUCH.remove(id);
         CompletableFuture<byte[]> f = FETCHES.remove(id);
         if (f != null) f.completeExceptionally(new RuntimeException(message));
     }
 
+    /** Janitor: drop half-assembled media whose chunks stopped arriving. */
+    private static void dropIdleAssemblies() {
+        long now = System.currentTimeMillis();
+        for (Map.Entry<String, Long> e : FETCH_TOUCH.entrySet()) {
+            if (now - e.getValue() <= ASSEMBLY_IDLE_MILLIS) continue;
+            String id = e.getKey();
+            if (!FETCH_TOUCH.remove(id, e.getValue())) continue;
+            LOGGER.info("[e33chat] server media assembly {} dropped after {}s idle",
+                id, ASSEMBLY_IDLE_MILLIS / 1000);
+            failFetch(id, "media assembly idle timeout: " + id);
+        }
+    }
+
     /** Client-side receiver; called from MediaResponsePacket.handle (dist-guarded). */
     public static void handleResponse(MediaResponsePacket packet) {
-        String id = packet.mediaId();
-        if (packet.totalChunks() == 1 && packet.chunk().length == 0) {
+        handleChunk(packet.mediaId(), packet.index(), packet.chunk(), packet.totalChunks());
+    }
+
+    /**
+     * Reassembly core, separated from the packet plumbing so it is unit-testable.
+     *
+     * <p>The first check is the {@link #FETCHES} gate: an id the client never
+     * requested is ignored outright, so no assembly entry, slot or byte budget is
+     * ever created for it (audit M12/L9). Only a live request may allocate.
+     */
+    static ChunkOutcome handleChunk(String id, int index, byte[] chunk, int totalChunks) {
+        if (id == null || chunk == null) return ChunkOutcome.REJECTED;
+        if (totalChunks == 1 && chunk.length == 0) {
             // Not-found sentinel
             failFetch(id, "media not found: " + id);
-            return;
+            return ChunkOutcome.REJECTED;
         }
-        // Allocation bounds: totalChunks and the reassembled size both come off
-        // the wire, so an unclamped array lets one hostile response OOM the
-        // client. The legitimate max is whatever the server allows per upload
-        // (8 MB in 512 KB chunks).
-        int totalChunks = packet.totalChunks();
+        // Gate: never assemble something we did not ask for. A hostile server
+        // cannot fill MAX_ACTIVE_ASSEMBLIES with zombie entries this way.
+        if (FETCHES.get(id) == null) {
+            return ChunkOutcome.UNREQUESTED;
+        }
+        // Allocation bounds: totalChunks, the chunk stream and the reassembled
+        // size all come off the wire, so an unclamped array lets one hostile
+        // response OOM the client. The legitimate max is whatever the server
+        // allows per upload (8 MB in 512 KB chunks).
         if (!DiskMediaStore.isValidChunkCount(totalChunks)) {
             failFetch(id, "media chunk count out of range: " + id);
-            return;
+            return ChunkOutcome.REJECTED;
         }
-        byte[][] buf = FETCH_BUFFERS.computeIfAbsent(id, k -> new byte[totalChunks][]);
-        if (packet.index() < 0 || packet.index() >= buf.length) return;
-        buf[packet.index()] = packet.chunk();
+        // The index is validated against the advertised count *before* any
+        // assembly is registered: an out-of-range index used to create a
+        // FETCH_BUFFERS entry that no ordered packet ever touched, leaking a slot
+        // held forever against MAX_ACTIVE_ASSEMBLIES (audit L9).
+        if (index < 0 || index >= totalChunks) return ChunkOutcome.REJECTED;
+        dropIdleAssemblies();
+        byte[][] buf = FETCH_BUFFERS.get(id);
+        if (buf == null) {
+            synchronized (FETCH_BUFFERS) {
+                buf = FETCH_BUFFERS.get(id);
+                if (buf == null) {
+                    if (FETCH_BUFFERS.size() >= MAX_ACTIVE_ASSEMBLIES) {
+                        LOGGER.info("[e33chat] server media assembly {} refused: {} concurrent assemblies (max {})",
+                            id, FETCH_BUFFERS.size(), MAX_ACTIVE_ASSEMBLIES);
+                        failFetch(id, "too many concurrent media assemblies");
+                        return ChunkOutcome.REJECTED;
+                    }
+                    buf = new byte[totalChunks][];
+                    FETCH_BUFFERS.put(id, buf);
+                }
+            }
+        }
+        if (index >= buf.length) return ChunkOutcome.REJECTED;
+        if (buf[index] == null) {
+            long have = FETCH_BYTES.merge(id, (long) chunk.length, Long::sum);
+            if (have > MAX_ASSEMBLY_BYTES) {
+                LOGGER.info("[e33chat] server media assembly {} dropped: {} bytes exceeds {} byte cap",
+                    id, have, MAX_ASSEMBLY_BYTES);
+                failFetch(id, "media too large: " + id);
+                return ChunkOutcome.REJECTED;
+            }
+        }
+        FETCH_TOUCH.put(id, System.currentTimeMillis());
+        buf[index] = chunk;
         int got = FETCH_COUNTS.merge(id, 1, Integer::sum);
         if (got == totalChunks) {
             FETCH_BUFFERS.remove(id);
             FETCH_COUNTS.remove(id);
+            FETCH_BYTES.remove(id);
+            FETCH_TOUCH.remove(id);
             CompletableFuture<byte[]> f = FETCHES.remove(id);
+            int total = 0;
+            boolean complete = true;
+            for (byte[] c : buf) {
+                if (c == null) { complete = false; break; }
+                total += c.length;
+            }
             if (f != null) {
-                int total = 0;
-                boolean complete = true;
-                for (byte[] c : buf) {
-                    if (c == null) { complete = false; break; }
-                    total += c.length;
-                }
                 if (!complete) {
                     f.completeExceptionally(new RuntimeException("media chunk missing: " + id));
                 } else if (total > DiskMediaStore.MAX_SINGLE_BYTES) {
@@ -137,7 +228,9 @@ public final class MediaClient {
                     f.complete(all);
                 }
             }
+            return ChunkOutcome.COMPLETE;
         }
+        return ChunkOutcome.ASSEMBLING;
     }
 
     /**
@@ -184,6 +277,7 @@ public final class MediaClient {
         // can never be the thing that "randomly failed to load".
         byte[] own = OWN_UPLOADS.get(mediaId);
         if (own != null) return own;
+        dropIdleAssemblies();
         // computeIfAbsent is atomic: the first caller owns the request, the rest
         // attach to the same future and never send their own MediaRequestPacket.
         CompletableFuture<byte[]> done = FETCHES.computeIfAbsent(mediaId, id -> {
@@ -197,6 +291,8 @@ public final class MediaClient {
             FETCHES.remove(mediaId, done);
             FETCH_BUFFERS.remove(mediaId);
             FETCH_COUNTS.remove(mediaId);
+            FETCH_BYTES.remove(mediaId);
+            FETCH_TOUCH.remove(mediaId);
             LOGGER.info("[e33chat] server media fetch {} timed out after {}s", mediaId, TIMEOUT_SECONDS);
             return null;
         } catch (Exception e) {
@@ -207,9 +303,32 @@ public final class MediaClient {
             FETCHES.remove(mediaId, done);
             FETCH_BUFFERS.remove(mediaId);
             FETCH_COUNTS.remove(mediaId);
+            FETCH_BYTES.remove(mediaId);
+            FETCH_TOUCH.remove(mediaId);
             LOGGER.info("[e33chat] server media fetch {} refused: {} (most likely the per-player "
                 + "transfer rate limit, 16 per 10s)", mediaId, e.getMessage());
             return null;
         }
+    }
+
+    // ---- package-private test hooks (no MC/network involved) ----
+
+    /** Register an in-flight request as {@link #fetch} would, and return its future. */
+    static CompletableFuture<byte[]> registerPendingFetchForTest(String mediaId) {
+        CompletableFuture<byte[]> f = new CompletableFuture<>();
+        FETCHES.put(mediaId, f);
+        return f;
+    }
+
+    static int activeAssemblyCountForTest() { return FETCH_BUFFERS.size(); }
+
+    static int pendingFetchCountForTest() { return FETCHES.size(); }
+
+    static void clearStateForTest() {
+        FETCHES.clear();
+        FETCH_BUFFERS.clear();
+        FETCH_COUNTS.clear();
+        FETCH_BYTES.clear();
+        FETCH_TOUCH.clear();
     }
 }
