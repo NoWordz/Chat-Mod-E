@@ -147,5 +147,3 @@ class ChatBubbleScreenSidebarWiringTest {
             "right of the 4px inset");
     }
 }
-
-// drift probe
