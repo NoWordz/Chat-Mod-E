@@ -10,6 +10,8 @@ import com.niuqu.chatbubble.render.UiLayout;
 import com.niuqu.chatbubble.image.BracketCodec;
 import com.niuqu.chatbubble.image.ImageEntry;
 import com.niuqu.chatbubble.image.ImageLoader;
+import com.niuqu.chatbubble.logic.ImageGeometry;
+import com.niuqu.chatbubble.logic.ImagePreviewLink;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.ClickEvent;
@@ -60,9 +62,10 @@ public final class ChatMessageRenderer {
         return scaledWrapWidth(bubbleMaxW, bubbleScale(lineHeight));
     }
 
-    // Bubble-less image rendering: long-edge clamped to the panel width so
-    // narrow windows/guiScale never push images off-screen; small images keep
-    // their real size (never upscaled).
+    // Inline image rendering (M8 §13 D3): a small long-edge thumbnail
+    // (ImageGeometry.THUMBNAIL_MAX_LONG_EDGE), clamped to the panel width so a
+    // narrow window/guiScale never pushes it off-screen; small images keep their
+    // real size (never upscaled).
     public static final int EMOTE_MAX_SIZE = 32;
 
     private ChatMessageRenderer() {}
@@ -170,25 +173,23 @@ public final class ChatMessageRenderer {
             : new com.niuqu.chatbubble.image.AnimatedImageLoader.FrameTex(tex, animated.width(), animated.height());
     }
 
-    /** Height in px for one bubble-less image (state-dependent, panel-clamped, never upscaled). */
+    /** Height in px for one inline image thumbnail (M8 §13 D3: small, never upscaled). */
     public static int imageEdgeHeight(String url, String nameHint, int panelW) {
         int maxW = Math.max(80, panelW - Appearance.avatarSize() - ChatLayout.PAD * 2 - 16);
         var animated = animatedEntry(url, nameHint);
         if (animated != null && animated.ready() && animated.width() > 0 && animated.height() > 0) {
-            float ratio = Math.min((float) maxW / animated.width(),
-                (float) maxW / animated.height());
-            ratio = Math.min(1f, ratio);
-            return Math.max(1, (int) (animated.height() * ratio));
+            return ImageGeometry.thumbnailSize(animated.width(), animated.height(),
+                ImageGeometry.THUMBNAIL_MAX_LONG_EDGE, maxW)[1];
         }
         ImageEntry entry = animatedPending(animated) ? null : ImageLoader.getOrLoad(url);
         if (entry != null && entry.state() == ImageEntry.State.LOADED
                 && entry.width() > 0 && entry.height() > 0) {
-            float ratio = Math.min((float) maxW / entry.width(),
-                (float) maxW / entry.height());
-            ratio = Math.min(1f, ratio);
-            return Math.max(1, (int) (entry.height() * ratio));
+            return ImageGeometry.thumbnailSize(entry.width(), entry.height(),
+                ImageGeometry.THUMBNAIL_MAX_LONG_EDGE, maxW)[1];
         }
-        return maxW;
+        // Still loading: the placeholder is the same small square, so the row no
+        // longer starts at the panel width and then jumps when the image decodes.
+        return ImageGeometry.thumbnailPlaceholder(ImageGeometry.THUMBNAIL_MAX_LONG_EDGE, maxW)[1];
     }
 
     /** Truncated sender-name sequence shared by bubble and bubble-less paths. */
@@ -213,8 +214,8 @@ public final class ChatMessageRenderer {
         }
     }
 
-    /** Bubble-less image message: name + avatar + optional text + images
-     * (240px long-edge, aspect preserved, stacked vertically, direction-aligned). */
+    /** Inline image message: name + avatar + optional text + thumbnails
+     * (small long-edge, aspect preserved, stacked vertically, direction-aligned). */
     public static void renderNoBubbleMessage(GuiGraphics g, Font font,
             ChatMessageStore.ChatMessage msg, int index, int baseY, boolean own, float alpha,
             BracketCodec.ParseResult parsed, List<FormattedCharSequence> lines,
@@ -253,26 +254,25 @@ public final class ChatMessageRenderer {
             y += lines.size() * font.lineHeight;
         }
 
+        // M8 (§13 D3): inline images are always small thumbnails; the not-yet-loaded
+        // placeholder is the same small square, so nothing jumps when it decodes.
         int maxImgW = Math.max(80, panelW - Appearance.avatarSize() - ChatLayout.PAD * 2 - 16);
         for (var ref : parsed.images()) {
-            int w = maxImgW, h = maxImgW;
+            int[] ph = ImageGeometry.thumbnailPlaceholder(ImageGeometry.THUMBNAIL_MAX_LONG_EDGE, maxImgW);
+            int w = ph[0], h = ph[1];
             var animated = animatedEntry(ref.url(), ref.name());
             var animatedFrame = animatedTex(animated);
             if (animatedFrame != null && animatedFrame.width() > 0 && animatedFrame.height() > 0) {
-                float ratio = Math.min((float) maxImgW / animatedFrame.width(),
-                    (float) maxImgW / animatedFrame.height());
-                ratio = Math.min(1f, ratio);
-                w = Math.max(1, (int) (animatedFrame.width() * ratio));
-                h = Math.max(1, (int) (animatedFrame.height() * ratio));
+                int[] th = ImageGeometry.thumbnailSize(animatedFrame.width(), animatedFrame.height(),
+                    ImageGeometry.THUMBNAIL_MAX_LONG_EDGE, maxImgW);
+                w = th[0]; h = th[1];
             } else {
                 ImageEntry entry = animatedPending(animated) ? null : ImageLoader.getOrLoad(ref.url());
                 if (entry != null && entry.state() == ImageEntry.State.LOADED
                         && entry.width() > 0 && entry.height() > 0) {
-                    float ratio = Math.min((float) maxImgW / entry.width(),
-                        (float) maxImgW / entry.height());
-                    ratio = Math.min(1f, ratio); // never upscale
-                    w = Math.max(1, (int) (entry.width() * ratio));
-                    h = Math.max(1, (int) (entry.height() * ratio));
+                    int[] th = ImageGeometry.thumbnailSize(entry.width(), entry.height(),
+                        ImageGeometry.THUMBNAIL_MAX_LONG_EDGE, maxImgW);
+                    w = th[0]; h = th[1];
                 }
             }
             int imgX = own ? (avatarX - UiTokens.AVATAR_NAME_GAP - w) : (avatarX + Appearance.avatarSize() + UiTokens.AVATAR_GAP);
@@ -296,9 +296,10 @@ public final class ChatMessageRenderer {
                         ChatBubbleTheme.alphaBlend(limited ? 0xFFFF5555 : c.textSecondary(), (int)(255 * alpha)), false);
                 }
             }
-            // Open the URL in the system browser on click; hover shows the URL
+            // M8: the primary click opens the in-game preview (the marker tells the
+            // screen so); the system browser stays reachable from a viewer button.
             Style st = Style.EMPTY
-                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, ref.url()))
+                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, ImagePreviewLink.encode(ref.url())))
                 .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Component.literal(ref.url())));
             clickableSpans.add(new ClickableSpan(imgX, y, w, h, st));
             y += h + 2;
@@ -399,7 +400,7 @@ public final class ChatMessageRenderer {
             }
         }
         Style st = Style.EMPTY
-            .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, ref.url()))
+            .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, ImagePreviewLink.encode(ref.url())))
             .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Component.literal(ref.url())));
         clickableSpans.add(new ClickableSpan(emoteX, emoteY, w, h, st));
         bubbleRects.add(new int[]{emoteX, emoteY, w, h, index});
@@ -701,8 +702,8 @@ public final class ChatMessageRenderer {
                 panelX, panelW, bubbleRects, clickableSpans, textSpans, selection, showAvatar);
             return;
         }
-        // Any message carrying images renders bubble-less too (240px long-edge,
-        // aspect preserved, stacked vertically, direction-aligned).
+        // Any message carrying images renders bubble-less too (small long-edge
+        // thumbnails, aspect preserved, stacked vertically, direction-aligned).
         if (!parsed.images().isEmpty()) {
             renderNoBubbleMessage(g, font, msg, index, baseY, own, alpha, parsed, lines, c, skin,
                 panelX, panelW, bubbleRects, clickableSpans, textSpans, selection, showAvatar);

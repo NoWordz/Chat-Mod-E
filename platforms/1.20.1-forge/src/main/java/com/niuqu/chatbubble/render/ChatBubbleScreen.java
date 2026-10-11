@@ -1213,6 +1213,10 @@ public class ChatBubbleScreen extends ChatScreen {
                 }
                 if (click.getAction() == net.minecraft.network.chat.ClickEvent.Action.OPEN_URL) {
                     String clickUrl = click.getValue();
+                    if (com.niuqu.chatbubble.logic.ImagePreviewLink.isPreviewClick(clickUrl)) {
+                        openImageViewer(com.niuqu.chatbubble.logic.ImagePreviewLink.decode(clickUrl));
+                        return true;
+                    }
                     if (clickUrl != null && (clickUrl.startsWith("http://") || clickUrl.startsWith("https://"))) {
                         handleComponentClicked(style);
                     }
@@ -2164,13 +2168,24 @@ public class ChatBubbleScreen extends ChatScreen {
                 net.minecraft.Util.getPlatform().openFile(file);
             } else if (click.getAction() == ClickEvent.Action.OPEN_URL) {
                 String clickUrl = click.getValue();
-                if (clickUrl != null && (clickUrl.startsWith("http://") || clickUrl.startsWith("https://"))) {
+                if (com.niuqu.chatbubble.logic.ImagePreviewLink.isPreviewClick(clickUrl)) {
+                    openImageViewer(com.niuqu.chatbubble.logic.ImagePreviewLink.decode(clickUrl));
+                } else if (clickUrl != null && (clickUrl.startsWith("http://") || clickUrl.startsWith("https://"))) {
                     handleComponentClicked(style);
                 }
             } else {
                 handleComponentClicked(style);
             }
         }
+    }
+
+    /** M8 (§13 D3): opens the full-screen image preview over the chat. The chat
+     *  screen instance is kept as the parent, so closing the viewer returns to the
+     *  same scroll position (the field survives setScreen away/back). */
+    private void openImageViewer(String url) {
+        if (url == null || url.isBlank()) return;
+        textSelection.clear();
+        minecraft.setScreen(new com.niuqu.chatbubble.ui.ImagePreviewScreen(this, url));
     }
 
     private net.minecraft.network.chat.Style getHoveredStyle(double mouseX, double mouseY) {
