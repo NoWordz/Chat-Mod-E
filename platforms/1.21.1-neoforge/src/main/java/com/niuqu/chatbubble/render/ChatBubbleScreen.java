@@ -1,4 +1,5 @@
 package com.niuqu.chatbubble.render;
+import com.niuqu.chatbubble.logic.SidebarModel;
 import com.niuqu.chatbubble.store.BlockList;
 import com.niuqu.chatbubble.ChatBubbleMod;
 import com.niuqu.chatbubble.store.ChatMessageStore;
@@ -120,6 +121,11 @@ public class ChatBubbleScreen extends ChatScreen {
     private boolean scrollToBottom = true;
     private boolean firstRender = true;
     private static String savedInput = "";
+
+    // Image-preview transition (2.5.0): while the preview screen is up, being
+    // replaced must not read as a close (that would drop the draft and reset the
+    // scroll). We capture the channel input/caret/scroll and reapply them when the
+    // preview hands control back.
     private boolean emojiReplacing;
 
     // Emoji panel
@@ -135,7 +141,6 @@ public class ChatBubbleScreen extends ChatScreen {
     final ChatQuickChatPanel quickChatPanel = new ChatQuickChatPanel();
     private EditBox quickChatInput;
     private static final int QUICK_CHAT_W = 140;
-    private static String whisperPartner;
 
     // Popup open animation timestamps (opening only; closing stays instant)
     private long settingsAnimStart, emojiAnimStart, quickAnimStart, searchAnimStart, groupAnimStart;
@@ -149,6 +154,10 @@ public class ChatBubbleScreen extends ChatScreen {
     private long sidebarAnimStart;
     private int sidebarScrollOffset;
     private int sidebarMaxScroll;
+    /** Row-granular scroll of the group block (see SidebarModel.groupMaxScroll). */
+    private int sidebarGroupScroll;
+    /** Row-granular scroll of the invite picker (see SidebarModel.SUBMENU_MAX_ROWS). */
+    private int inviteSubmenuScroll;
     private EditBox sidebarSearchBox;
 
     // Real drag selection for EditBox inputs (vanilla doesn't support mouse-drag selection)
@@ -176,11 +185,18 @@ public class ChatBubbleScreen extends ChatScreen {
     private int mentionIdx;
     private String mentionFilter = "";
 
-    // Right-click menu
-    private int contextMsgIndex = -1;
+    // Right-click menu. The target is the row itself, never its list index: a v2
+    // history page lands in the middle of the list, so an index captured at click
+    // time names a different message by the time the menu action runs.
+    // ChatMessageStore.resolveVisibleMessage re-resolves the row — and re-checks
+    // that the current directory still authorizes it — when the action consumes it.
+    private ChatMessageStore.ChatMessage contextMenuTarget;
     private int contextX, contextY;
-    private int contextAvatarIndex = -1;
+    private ChatMessageStore.ChatMessage contextAvatarTarget;
     private int contextAvatarX, contextAvatarY;
+    /** Group picker hung off the avatar menu's 「邀请入群」 row (2.5.0). */
+    private boolean inviteSubmenuOpen;
+    private String inviteSubmenuTarget;
 
     // Per-frame wrap cache: every message is measured once (layout pass) and
     // rendered once (bubble pass), and both call msgHeight -> wrapContent.
@@ -201,8 +217,9 @@ public class ChatBubbleScreen extends ChatScreen {
     private double selectionStartX;
     private double selectionStartY;
 
-    // Reply / quote
-    private int replyTargetIndex = -1;
+    // Reply / quote: the row captured when the menu was clicked, re-resolved on
+    // every render and again at send time so a mid-list backfill cannot retarget it.
+    private ChatMessageStore.ChatMessage replyTarget;
 
     // Copy toast
     private int copyToastTicks;
@@ -242,6 +259,8 @@ public class ChatBubbleScreen extends ChatScreen {
             }
             @Override public void onRestoreInput(String text) { input.setValue(text); }
         });
+
+
 
     // Animations
     private long animStart;
@@ -310,6 +329,7 @@ public class ChatBubbleScreen extends ChatScreen {
         input.setResponder(this::onInputEdited);
         addRenderableWidget(input);
 
+
         int cmdBgAlpha = ChatBubbleConfig.THEME.get() == ChatBubbleTheme.LIGHT ? 0x99 : 0xDD;
         suggestions = new CommandSuggestions(minecraft, this, input, font,
             false, false, 0, 8, true, ChatBubbleTheme.alphaBlend(c().panelBg(), cmdBgAlpha));
@@ -353,7 +373,10 @@ public class ChatBubbleScreen extends ChatScreen {
         addRenderableWidget(searchInput);
 
         groupCreateInput = new EditBox(font, 0, 0, 120, 12, Component.translatable("e33chat.group.create_placeholder"));
-        groupCreateInput.setMaxLength(12);
+        // The same field takes a group name (max 12, validated server-side) and an invitee
+        // name (up to 16 chars): cap it at the player-name limit and let the server reject
+        // an over-long group name with its own message.
+        groupCreateInput.setMaxLength(16);
         groupCreateInput.setBordered(false);
         groupCreateInput.setTextColor(editColor);
         groupCreateInput.setTextColorUneditable(c().textMuted());
@@ -431,7 +454,7 @@ public class ChatBubbleScreen extends ChatScreen {
     }
 
     private String getDisplayTitle() {
-        if (whisperPartner != null) return whisperPartner;
+        if (com.niuqu.chatbubble.chat.GroupChannelState.whisperPartner() != null) return com.niuqu.chatbubble.chat.GroupChannelState.whisperPartner();
         return Component.translatable("e33chat.sidebar.public").getString();
     }
 
@@ -440,9 +463,9 @@ public class ChatBubbleScreen extends ChatScreen {
 
     private void renderSidebar(GuiGraphics g, int mouseX, int mouseY, float alpha) {
         sidebarMaxScroll = ChatSidebar.render(g, font, mouseX, mouseY, c(), panelW,
-            msgBottom > 0 ? msgBottom : height - BAR_H, whisperPartner,
-            iconTex("public_icon"), iconTex("no_online"), iconTex("private_tip"),
-            sidebarSearchBox, sidebarScrollOffset, sidebarMaxScroll, alpha, height);
+            msgBottom > 0 ? msgBottom : height - BAR_H, com.niuqu.chatbubble.chat.GroupChannelState.whisperPartner(),
+            iconTex("public_icon"), iconTex("group"), iconTex("no_online"), iconTex("private_tip"),
+            sidebarSearchBox, sidebarScrollOffset, sidebarGroupScroll, sidebarMaxScroll, alpha, height);
         if (sidebarScrollOffset > sidebarMaxScroll) sidebarScrollOffset = sidebarMaxScroll;
     }
 
@@ -510,7 +533,7 @@ public class ChatBubbleScreen extends ChatScreen {
         var msgs = ChatMessageStore.getMessages();
         for (int i = 0; i < msgs.size(); i++) {
             var msg = msgs.get(i);
-            if (msg == null) continue;
+            if (msg == null || !com.niuqu.chatbubble.chat.GroupChannelState.isVisible(msg)) continue;
             if (msg.content().getString().toLowerCase().contains(lower)
                 || msg.senderName().getString().toLowerCase().contains(lower))
                 searchMatches.add(i);
@@ -801,11 +824,21 @@ public class ChatBubbleScreen extends ChatScreen {
             String name = groupCreateInput.getValue().trim();
             if (!name.isEmpty()) {
                 groupCreateInput.setValue("");
-                com.niuqu.chatbubble.packets.GroupActionPayload.send(
-                    com.niuqu.chatbubble.packets.GroupActionPayload.CREATE, name);
-                // 与点击[创建]一致：切到新群页签并收起弹层
-                com.niuqu.chatbubble.chat.GroupChannelState.setActive(name);
-                closeGroupBrowser();
+                if (groupBrowser.isManaging() && groupBrowser.actionGroupId != null) {
+                    com.niuqu.chatbubble.packets.GroupActionV2Payload.send(
+                        com.niuqu.chatbubble.packets.GroupActionV2Payload.INVITE,
+                        groupBrowser.actionGroupId,
+                        com.niuqu.chatbubble.packets.GroupActionV2Payload.NONE,
+                        com.niuqu.chatbubble.packets.GroupActionV2Payload.NONE, name);
+                } else {
+                    com.niuqu.chatbubble.packets.GroupActionV2Payload.send(
+                        com.niuqu.chatbubble.packets.GroupActionV2Payload.CREATE,
+                        com.niuqu.chatbubble.packets.GroupActionV2Payload.NONE,
+                        com.niuqu.chatbubble.packets.GroupActionV2Payload.NONE,
+                        com.niuqu.chatbubble.packets.GroupActionV2Payload.NONE, name);
+                    // 服务器分配稳定 UUID，页签在目录回包后出现；此处不预选。
+                    closeGroupBrowser();
+                }
             }
             return true;
         }
@@ -883,10 +916,35 @@ public class ChatBubbleScreen extends ChatScreen {
             mentionNavigated = true;
             return true;
         }
-        int sidebarX = (int) getSidebarScreenX();
+        if (inviteSubmenuOpen) {
+            // The picker floats over the panel, so it takes the wheel before the sidebar.
+            int pickerRows = com.niuqu.chatbubble.chat.GroupChannelState.directory().size();
+            int pickerVisible = Math.min(pickerRows, SidebarModel.SUBMENU_MAX_ROWS);
+            int[] pr = inviteSubmenuRect(pickerVisible);
+            if (mouseX >= pr[0] && mouseX <= pr[0] + pr[2]
+                && mouseY >= pr[1] && mouseY <= pr[1] + pr[3]) {
+                inviteSubmenuScroll = Mth.clamp(inviteSubmenuScroll - (int) Math.signum(scrollY), 0,
+                    Math.max(0, pickerRows - pickerVisible));
+                return true;
+            }
+        }
+        int sidebarX = getSidebarScreenX();
         if ((sidebarOpen || sidebarAnimating)
             && mouseX >= sidebarX && mouseX <= sidebarX + SIDEBAR_W) {
-            sidebarScrollOffset = Mth.clamp(sidebarScrollOffset - (int)(scrollY * 20), 0, sidebarMaxScroll);
+            // Two scroll regions in one column: the group block (row-granular) when the
+            // cursor is over it, otherwise the player list.
+            int groupRows = ChatSidebar.groupTabs().size();
+            int groupTop = SidebarModel.groupTitleY(groupRows);
+            int groupBottom = SidebarModel.createRowY(groupRows) + SidebarModel.ROW_STEP;
+            if (groupRows > 0 && mouseY >= groupTop && mouseY <= groupBottom) {
+                // One notch = one row: the window derives from the pixel offset, so a 1px
+                // step would take 24 notches to move the list once.
+                sidebarGroupScroll = Mth.clamp(
+                    sidebarGroupScroll - (int) Math.signum(scrollY) * SidebarModel.ROW_STEP, 0,
+                    SidebarModel.groupMaxScroll(groupRows));
+            } else {
+                sidebarScrollOffset = Mth.clamp(sidebarScrollOffset - (int)(scrollY * 20), 0, sidebarMaxScroll);
+            }
             return true;
         }
         if (suggestions != null && suggestions.mouseScrolled(scrollY))
@@ -937,8 +995,9 @@ public class ChatBubbleScreen extends ChatScreen {
 
         // Sidebar clicks — route to sidebar for hit detection, Screen handles side effects
         int sidebarX = (int) getSidebarScreenX();
-        if (ChatSidebar.handleMouseClicked(origX, mouseY, whisperPartner, font,
-                sidebarX, sidebarOpen || sidebarAnimating, sidebarSearchBox, sidebarScrollOffset)) {
+        if (ChatSidebar.handleMouseClicked(origX, mouseY, com.niuqu.chatbubble.chat.GroupChannelState.whisperPartner(), font,
+                sidebarX, sidebarOpen || sidebarAnimating, sidebarSearchBox, sidebarScrollOffset,
+                sidebarGroupScroll, msgBottom > 0 ? msgBottom : height - BAR_H)) {
             // Search box
             int searchY = 2;
             int searchH = SIDEBAR_SEARCH_H;
@@ -959,13 +1018,48 @@ public class ChatBubbleScreen extends ChatScreen {
 
             int y = searchY + searchH + 3;
             if (mouseY >= y && mouseY <= y + 22) {
-                whisperPartner = null;
+                // The 「世界频道」 row: shared ChannelStateMachine leaves a group
+                // tab to 全部 (never 世界 — its filter drops system rows) and ends
+                // any whisper view; on a pseudo tab it is a 2.4.17 no-op.
+                com.niuqu.chatbubble.chat.GroupChannelState.selectWorldRow();
                 sidebarSearchBox.setValue("");
                 setFocused(input);
                 scrollToBottom = true;
                 return true;
             }
             y += 22 + 2;
+            // Group rows (v2 groups + pre-2.5 legacy tabs): a click opens that channel.
+            // Clipped to the list bottom exactly like the draw, so a group row can never
+            // shadow the create button below it.
+            List<String> sidebarTabs = ChatSidebar.groupTabs();
+            int sidebarBottom = msgBottom > 0 ? msgBottom : height - BAR_H;
+            int sidebarListEnd = SidebarModel.listBottom(sidebarBottom);
+            int firstGroupRow = SidebarModel.groupFirstRow(sidebarTabs.size(), sidebarGroupScroll);
+            int lastGroupRow = SidebarModel.groupWindowEnd(sidebarTabs.size(), firstGroupRow);
+            for (int i = firstGroupRow; i < lastGroupRow; i++) {
+                int gy = SidebarModel.groupWindowRowY(sidebarTabs.size(), i, firstGroupRow);
+                if (gy + 22 > sidebarListEnd) break; // clipped: neither drawn nor clickable
+                if (mouseY >= gy && mouseY <= gy + 22) {
+                    com.niuqu.chatbubble.chat.GroupChannelState.selectGroup(sidebarTabs.get(i));
+                    // Switching channels dismisses any context menu still on screen.
+                    contextAvatarTarget = null;
+                    inviteSubmenuOpen = false;
+                    inviteSubmenuTarget = null;
+                    sidebarSearchBox.setValue("");
+                    setFocused(input);
+                    scrollToBottom = true;
+                    return true;
+                }
+            }
+            // 「＋ 创建群组」: the standalone button pinned above the input bar.
+            int createY = SidebarModel.createButtonY(sidebarBottom);
+            if (mouseY >= createY && mouseY <= createY + SidebarModel.CREATE_BTN_H
+                && origX - sidebarX >= 4 && origX - sidebarX <= SIDEBAR_W - 4) {
+                openGroupBrowserForCreate();
+                return true;
+            }
+            y = SidebarModel.playerStartY(sidebarTabs.size());
+            int sidebarTop = y;
             if (minecraft.player != null && minecraft.player.connection != null) {
                 var players = new ArrayList<>(minecraft.player.connection.getOnlinePlayers());
                 String selfName = minecraft.player.getName().getString();
@@ -976,8 +1070,10 @@ public class ChatBubbleScreen extends ChatScreen {
                     if (name.equals(selfName)) continue;
                     if (ChatBubbleConfig.isSidebarHidden(name)) continue;
                     if (!filter.isEmpty() && !name.toLowerCase().contains(filter)) continue;
-                    if (mouseY >= scrollY && mouseY <= scrollY + 22) {
-                        whisperPartner = name;
+                    if (scrollY + 22 > sidebarTop && scrollY < sidebarListEnd
+                        && mouseY >= Math.max(scrollY, sidebarTop)
+                        && mouseY <= Math.min(scrollY + 22, sidebarListEnd)) {
+                        com.niuqu.chatbubble.chat.GroupChannelState.selectWhisper(name);
                         ChatMessageStore.clearUnreadWhisper(name);
                         sidebarSearchBox.setValue("");
                         setFocused(input);
@@ -990,17 +1086,21 @@ public class ChatBubbleScreen extends ChatScreen {
         }
 
         // Context menu clicks must be handled before dismiss
-        if (button == 0 && contextAvatarIndex >= 0) {
+        if (button == 0 && contextAvatarTarget != null && inviteSubmenuOpen) {
+            handleInviteSubmenuClick(mouseX, mouseY);
+            return true;
+        }
+        if (button == 0 && contextAvatarTarget != null) {
             handleAvatarContextClick((int) mouseX, (int) mouseY);
             return true;
         }
-        if (contextAvatarIndex >= 0) { contextAvatarIndex = -1; return true; }
+        if (contextAvatarTarget != null) { contextAvatarTarget = null; inviteSubmenuOpen = false; inviteSubmenuTarget = null; return true; }
 
-        if (button == 0 && contextMsgIndex >= 0) {
+        if (button == 0 && contextMenuTarget != null) {
             handleContextClick((int) mouseX, (int) mouseY);
             return true;
         }
-        if (contextMsgIndex >= 0) { contextMsgIndex = -1; return true; }
+        if (contextMenuTarget != null) { contextMenuTarget = null; return true; }
 
         // Notification bar clicks
         if (button == 0 && newMessageCount > 0) {
@@ -1022,8 +1122,8 @@ public class ChatBubbleScreen extends ChatScreen {
         }
 
         // Reply bar cancel button
-        if (button == 0 && replyTargetIndex >= 0 && isMouseOverReplyCancel(mouseX, mouseY)) {
-            replyTargetIndex = -1;
+        if (button == 0 && replyTarget != null && isMouseOverReplyCancel(mouseX, mouseY)) {
+            replyTarget = null;
             return true;
         }
 
@@ -1170,22 +1270,70 @@ public class ChatBubbleScreen extends ChatScreen {
             }
             if (groupBrowser.visible) {
                 if (groupBrowser.isClickOnPanel(mouseX, mouseY)) {
-                    int act = groupBrowser.handleClick(mouseX, mouseY, font, panelX, panelW, barTop, groupCreateInput);
-                    if (act == com.niuqu.chatbubble.ui.GroupBrowserPanel.ACT_JOIN) {
-                        com.niuqu.chatbubble.packets.GroupActionPayload.send(
-                            com.niuqu.chatbubble.packets.GroupActionPayload.JOIN, groupBrowser.actionGroup);
-                        com.niuqu.chatbubble.chat.GroupChannelState.setActive(groupBrowser.actionGroup);
-                        closeGroupBrowser();
-                    } else if (act == com.niuqu.chatbubble.ui.GroupBrowserPanel.ACT_LEAVE) {
-                        com.niuqu.chatbubble.packets.GroupActionPayload.send(
-                            com.niuqu.chatbubble.packets.GroupActionPayload.LEAVE, groupBrowser.actionGroup);
-                    } else if (act == com.niuqu.chatbubble.ui.GroupBrowserPanel.ACT_CREATE) {
-                        com.niuqu.chatbubble.packets.GroupActionPayload.send(
-                            com.niuqu.chatbubble.packets.GroupActionPayload.CREATE, groupBrowser.actionGroup);
-                        // 与加入一致：创建者直接切到新群页签并收起弹层，省一次手动点击
-                        com.niuqu.chatbubble.chat.GroupChannelState.setActive(groupBrowser.actionGroup);
-                        closeGroupBrowser();
+                    // Forward the click to the panel's own field, exactly like the search
+                    // panel above does: 邀请 and 改名 take their target name from it, and a
+                    // click inside this panel never reached the field before.
+                    boolean handledInput = groupCreateInput.mouseClicked(mouseX, mouseY, button);
+                    setFocused(groupCreateInput);
+                    if (handledInput && button == 0) {
+                        setDragging(true);
+                        inputDragTarget = groupCreateInput;
+                        inputDragAnchor = inputDragTarget.getCursorPosition();
                     }
+                    int act = groupBrowser.handleClick(mouseX, mouseY, font, panelX, panelW, barTop, groupCreateInput);
+                    java.util.UUID gid = groupBrowser.actionGroupId;
+                    java.util.UUID subj = groupBrowser.actionSubject;
+                    java.util.UUID inv = groupBrowser.actionInvitation;
+                    var NONE = com.niuqu.chatbubble.packets.GroupActionV2Payload.NONE;
+                    boolean close = false;
+                    switch (act) {
+                        case com.niuqu.chatbubble.ui.GroupBrowserPanel.ACT_CREATE -> {
+                            com.niuqu.chatbubble.packets.GroupActionV2Payload.send(
+                                com.niuqu.chatbubble.packets.GroupActionV2Payload.CREATE, NONE, NONE, NONE,
+                                groupBrowser.actionGroup);
+                            close = true;
+                        }
+                        case com.niuqu.chatbubble.ui.GroupBrowserPanel.ACT_INVITE ->
+                            com.niuqu.chatbubble.packets.GroupActionV2Payload.send(
+                                com.niuqu.chatbubble.packets.GroupActionV2Payload.INVITE, gid, NONE, NONE,
+                                groupBrowser.actionGroup);
+                        case com.niuqu.chatbubble.ui.GroupBrowserPanel.ACT_ACCEPT -> {
+                            com.niuqu.chatbubble.packets.GroupActionV2Payload.send(
+                                com.niuqu.chatbubble.packets.GroupActionV2Payload.ACCEPT, NONE, NONE, inv, "");
+                            close = true;
+                        }
+                        case com.niuqu.chatbubble.ui.GroupBrowserPanel.ACT_REJECT ->
+                            com.niuqu.chatbubble.packets.GroupActionV2Payload.send(
+                                com.niuqu.chatbubble.packets.GroupActionV2Payload.REJECT, NONE, NONE, inv, "");
+                        case com.niuqu.chatbubble.ui.GroupBrowserPanel.ACT_LEAVE -> {
+                            com.niuqu.chatbubble.packets.GroupActionV2Payload.send(
+                                com.niuqu.chatbubble.packets.GroupActionV2Payload.LEAVE, gid, NONE, NONE, "");
+                            close = true;
+                        }
+                        case com.niuqu.chatbubble.ui.GroupBrowserPanel.ACT_RENAME ->
+                            com.niuqu.chatbubble.packets.GroupActionV2Payload.send(
+                                com.niuqu.chatbubble.packets.GroupActionV2Payload.RENAME, gid, NONE, NONE,
+                                groupBrowser.actionGroup);
+                        case com.niuqu.chatbubble.ui.GroupBrowserPanel.ACT_KICK ->
+                            com.niuqu.chatbubble.packets.GroupActionV2Payload.send(
+                                com.niuqu.chatbubble.packets.GroupActionV2Payload.KICK, gid, subj, NONE, "");
+                        case com.niuqu.chatbubble.ui.GroupBrowserPanel.ACT_TRANSFER ->
+                            com.niuqu.chatbubble.packets.GroupActionV2Payload.send(
+                                com.niuqu.chatbubble.packets.GroupActionV2Payload.TRANSFER_OWNER, gid, subj, NONE, "");
+                        case com.niuqu.chatbubble.ui.GroupBrowserPanel.ACT_DISBAND -> {
+                            com.niuqu.chatbubble.packets.GroupActionV2Payload.send(
+                                com.niuqu.chatbubble.packets.GroupActionV2Payload.DISBAND, gid, NONE, NONE, "");
+                            close = true;
+                        }
+                        // A pre-2.5 name-keyed group has no stable id: opening its
+                        // channel is all the client can do.
+                        case com.niuqu.chatbubble.ui.GroupBrowserPanel.ACT_OPEN -> {
+                            com.niuqu.chatbubble.chat.GroupChannelState.selectGroup(groupBrowser.actionGroup);
+                            close = true;
+                        }
+                        default -> { }
+                    }
+                    if (close) closeGroupBrowser();
                     return true;
                 }
                 closeGroupBrowser();
@@ -1244,20 +1392,7 @@ public class ChatBubbleScreen extends ChatScreen {
         if (button == 0 && !groupBrowser.visible) {
             String hitTab = hitTestTabStrip(mouseX, mouseY);
             if (hitTab != null) {
-                if (hitTab.equals("+")) {
-                    if (settingsMenu.visible) beginPopupClose(s -> settingsCloseStart = s, () -> settingsMenu.visible = false);
-                    if (emojiPanel.visible) beginPopupClose(s -> emojiCloseStart = s, () -> emojiPanel.visible = false);
-                    if (searchPanel.visible) closeSearchPanel();
-                    // 上一次关闭动画的时间戳必须清掉，否则 renderPopupWithAnim 会
-                    // 认为「closeStart > openStart」而继续走关闭曲线。
-                    groupCloseStart = 0;
-                    groupBrowser.visible = true;
-                    groupAnimStart = net.minecraft.Util.getMillis();
-                    groupCreateInput.setValue("");
-                    setFocused(groupCreateInput);
-                } else {
-                    com.niuqu.chatbubble.chat.GroupChannelState.setActive(hitTab);
-                }
+                com.niuqu.chatbubble.chat.GroupChannelState.setActive(hitTab);
                 return true;
             }
         }
@@ -1290,7 +1425,7 @@ public class ChatBubbleScreen extends ChatScreen {
                 int avatarY = msg.replyContent() != null ? r[1] - font.lineHeight - 2 : r[1] - NAME_H;
                 if (mouseX >= avatarX && mouseX <= avatarX + Appearance.avatarSize()
                     && mouseY >= avatarY && mouseY <= avatarY + Appearance.avatarSize()) {
-                    contextAvatarIndex = r[4];
+                    contextAvatarTarget = msg;
                     contextAvatarX = (int) mouseX;
                     contextAvatarY = (int) mouseY;
                     return true;
@@ -1302,7 +1437,9 @@ public class ChatBubbleScreen extends ChatScreen {
             for (int[] r : bubbleRects) {
                 if (mouseX >= r[0] && mouseX <= r[0] + r[2]
                     && mouseY >= r[1] && mouseY <= r[1] + r[3]) {
-                    contextMsgIndex = r[4];
+                    ChatMessageStore.ChatMessage msg = ChatMessageStore.getMessageAt(r[4]);
+                    if (msg == null) continue;
+                    contextMenuTarget = msg;
                     contextX = (int) mouseX;
                     contextY = (int) mouseY;
                     return true;
@@ -1507,52 +1644,73 @@ public class ChatBubbleScreen extends ChatScreen {
         int menuX = ChatContextMenus.menuX(contextX, panelX, panelW);
         int menuY = ChatContextMenus.menuY(contextY, menuH, msgTop, true);
 
+        // Re-resolve before acting: a page that landed while the menu was open may
+        // have moved the row, and a row the directory no longer authorizes must not
+        // be copied or quoted.
+        ChatMessageStore.ChatMessage target = ChatMessageStore.resolveVisibleMessage(contextMenuTarget);
+
         if (ChatContextMenus.isOverItem(mx, my, menuX, menuY, ChatContextMenus.CTX_ITEM_H)) {
-            ChatMessageStore.ChatMessage msg = ChatMessageStore.getMessageAt(contextMsgIndex);
-            if (msg != null) {
-                minecraft.keyboardHandler.setClipboard(msg.content().getString());
+            if (target != null) {
+                minecraft.keyboardHandler.setClipboard(target.content().getString());
                 showToast("e33chat.toast.copied");
             }
         } else if (ChatContextMenus.isOverItem(mx, my, menuX,
             menuY + ChatContextMenus.CTX_ITEM_H + 1, ChatContextMenus.CTX_ITEM_H)) {
-            replyTargetIndex = contextMsgIndex;
+            replyTarget = target;
         }
-        contextMsgIndex = -1;
+        contextMenuTarget = null;
     }
 
     private void handleAvatarContextClick(int mx, int my) {
-        int menuH = ChatContextMenus.CTX_ITEM_H * 4 + 6;
+        int menuH = ChatContextMenus.CTX_ITEM_H * 5 + 8;
         int menuX = ChatContextMenus.menuX(contextAvatarX, panelX, panelW);
         int menuY = ChatContextMenus.menuY(contextAvatarY, menuH, msgTop, true);
 
-        ChatMessageStore.ChatMessage msg = ChatMessageStore.getMessageAt(contextAvatarIndex);
+        // Re-resolve before acting (see handleContextClick): the avatar menu must
+        // keep addressing the row it was opened on, and only while that row is
+        // still authorized.
+        ChatMessageStore.ChatMessage msg = ChatMessageStore.resolveVisibleMessage(contextAvatarTarget);
         String name = msg != null ? msg.rawPlayerName() : null;
-        if (name == null || name.isEmpty()) { contextAvatarIndex = -1; return; }
+        if (name == null || name.isEmpty()) { contextAvatarTarget = null; return; }
 
         if (ChatContextMenus.isOverItem(mx, my, menuX, menuY, ChatContextMenus.CTX_ITEM_H)) {
             minecraft.player.connection.sendCommand((ChatMessageStore.useTpa() ? "tpa " : "tp ") + name);
         } else if (ChatContextMenus.isOverItem(mx, my, menuX,
             menuY + ChatContextMenus.CTX_ITEM_H + 2, ChatContextMenus.CTX_ITEM_H)) {
-            whisperPartner = name;
+            com.niuqu.chatbubble.chat.GroupChannelState.selectWhisper(name);
             ChatMessageStore.clearUnreadWhisper(name);
             if (sidebarSearchBox != null) sidebarSearchBox.setValue("");
             setFocused(input);
             scrollToBottom = true;
         } else if (ChatContextMenus.isOverItem(mx, my, menuX,
             menuY + ChatContextMenus.CTX_ITEM_H * 2 + 4, ChatContextMenus.CTX_ITEM_H)) {
-            toggleBlockedPlayer();
+            toggleBlockedPlayer(msg);
         } else if (ChatContextMenus.isOverItem(mx, my, menuX,
             menuY + ChatContextMenus.CTX_ITEM_H * 3 + 6, ChatContextMenus.CTX_ITEM_H)) {
             // 2.4.10 玩家资料卡：关闭菜单后叠加打开（parent 回聊天界面）
             minecraft.setScreen(new com.niuqu.chatbubble.ui.PlayerProfileScreen(this, name));
+        } else if (ChatContextMenus.isOverItem(mx, my, menuX,
+            menuY + ChatContextMenus.CTX_ITEM_H * 4 + 8, ChatContextMenus.CTX_ITEM_H)) {
+            // Row 5 (2.5.0): invite needs a target group, so on the public channel it
+            // opens the picker; inside a group it kicks straight away (owner only).
+            if (!groupView()) {
+                inviteSubmenuOpen = true;
+                inviteSubmenuTarget = name;
+                return; // keep the avatar menu open behind the picker
+            }
+            if (ChatSidebar.ownsGroup(com.niuqu.chatbubble.chat.GroupChannelState.active())) {
+                String group = com.niuqu.chatbubble.chat.GroupChannelState
+                    .tabDisplayName(com.niuqu.chatbubble.chat.GroupChannelState.active());
+                if (group != null && minecraft.player != null)
+                    minecraft.player.connection.sendCommand("e33chat group kick " + group + " " + name);
+            }
         }
-        contextAvatarIndex = -1;
+        contextAvatarTarget = null;
     }
 
     // 屏蔽/取消屏蔽右键菜单目标玩家：名单即时生效 + 从消息列表清掉历史 +
     // 立即写盘（set() 只改内存，参考 doClose 的 saveClientConfig 约定）
-    private void toggleBlockedPlayer() {
-        ChatMessageStore.ChatMessage msg = ChatMessageStore.getMessageAt(contextAvatarIndex);
+    private void toggleBlockedPlayer(ChatMessageStore.ChatMessage msg) {
         if (msg == null) return;
         String name = msg.rawPlayerName();
         if (name == null || name.isEmpty()) {
@@ -1714,18 +1872,18 @@ public class ChatBubbleScreen extends ChatScreen {
         return mx >= menuX && mx <= menuX + ICON_S && my >= menuY && my <= menuY + ICON_S;
     }
 
-    // ==== 群组页签条（2.4.10）====
+    // ==== 频道页签条（2.4.10；2.5.0 起群组已移到侧栏，这里只剩 全部/世界/系统）====
 
     private static final int TAB_H = 16;
 
     /** 页签显示条件：非私聊视图 + 服务器群组功能在线（GroupListPacket 已到达）+ 非单人。 */
     private boolean tabsVisible() {
-        return whisperPartner == null
+        return com.niuqu.chatbubble.chat.GroupChannelState.whisperPartner() == null
             && com.niuqu.chatbubble.chat.GroupChannelState.supported()
             && !minecraft.isSingleplayer();
     }
 
-    /** 页签布局：全部 / 世界 / 系统 / 我的群组们 / [+]。返回 {x, w, 标签} 三元组列表。 */
+    /** 页签布局：全部 / 世界 / 系统。返回 {x, w, 标签} 三元组列表。 */
     private java.util.List<Object[]> tabLayout() {
         java.util.List<Object[]> tabs = new java.util.ArrayList<>();
         int[] cx = {panelX + 4};
@@ -1740,8 +1898,8 @@ public class ChatBubbleScreen extends ChatScreen {
             com.niuqu.chatbubble.chat.GroupChannelState.TAB_WORLD);
         add.accept(Component.translatable("e33chat.group.tab_system").getString(),
             com.niuqu.chatbubble.chat.GroupChannelState.TAB_SYSTEM);
-        for (String g : com.niuqu.chatbubble.chat.GroupChannelState.myGroups) add.accept(g, g);
-        tabs.add(new Object[]{cx[0], TAB_H - 2, "+", "+"});
+        // 2.5.0: groups (and the create entry) moved into the sidebar column — one
+        // entity, one entry, one selection state. Only the three fixed channels stay.
         return tabs;
     }
 
@@ -1751,7 +1909,7 @@ public class ChatBubbleScreen extends ChatScreen {
         for (Object[] t : tabLayout()) {
             int tx = (Integer) t[0], tw = (Integer) t[1];
             String tab = (String) t[2], label = (String) t[3];
-            boolean sel = label.equals("+") ? groupBrowser.visible : tab.equals(active);
+            boolean sel = tab.equals(active);
             boolean hov = mouseX >= tx && mouseX <= tx + tw && mouseY >= tabY && mouseY <= tabY + TAB_H;
             int bg = sel ? c().sidebarItemSelected()
                 : hov ? c().sidebarItemHover() : c().popupBg();
@@ -1760,16 +1918,11 @@ public class ChatBubbleScreen extends ChatScreen {
             int textY = tabY + (TAB_H - font.lineHeight) / 2 + 1;
             int color = ChatBubbleTheme.alphaBlend(
                 sel ? c().textPrimary() : c().textSecondary(), (int) (255 * alpha));
-            if (label.equals("+")) {
-                int cx2 = tx + tw / 2 - font.width("+") / 2;
-                g.drawString(font, "+", cx2, textY, color, false);
-            } else {
-                g.drawString(font, label, tx + 6, textY, color, false);
-            }
+            g.drawString(font, label, tx + 6, textY, color, false);
         }
     }
 
-    /** 命中页签：返回 tab id（TAB_ALL / TAB_* / 群名）或 "+"；未命中返回 null。 */
+    /** 命中页签：返回 tab id（TAB_ALL / TAB_*）；未命中返回 null。 */
     private String hitTestTabStrip(double mouseX, double mouseY) {
         if (!tabsVisible()) return null;
         int tabY = msgTop;
@@ -1781,6 +1934,21 @@ public class ChatBubbleScreen extends ChatScreen {
         return null;
     }
 
+    /** Open the group panel with the create-name field focused (sidebar ＋ entry). */
+    private void openGroupBrowserForCreate() {
+        if (settingsMenu.visible) beginPopupClose(s -> settingsCloseStart = s, () -> settingsMenu.visible = false);
+        if (emojiPanel.visible) beginPopupClose(s -> emojiCloseStart = s, () -> emojiPanel.visible = false);
+        if (searchPanel.visible) closeSearchPanel();
+        // 上一次关闭动画的时间戳必须清掉，否则 renderPopupWithAnim 会
+        // 认为「closeStart > openStart」而继续走关闭曲线。
+        groupCloseStart = 0;
+        groupBrowser.reset();
+        groupBrowser.visible = true;
+        groupAnimStart = net.minecraft.Util.getMillis();
+        groupCreateInput.setValue("");
+        setFocused(groupCreateInput);
+    }
+
     private void closeGroupBrowser() {
         beginPopupClose(s -> groupCloseStart = s, this::hideGroupBrowser);
         setFocused(input);
@@ -1790,23 +1958,57 @@ public class ChatBubbleScreen extends ChatScreen {
     private void hideGroupBrowser() {
         groupCloseStart = 0;
         groupBrowser.visible = false;
+        groupBrowser.reset();
         if (groupCreateInput != null) groupCreateInput.setVisible(false);
     }
 
+    // ---- Layout cache (audit P1): reuse per-row heights across frames ----
+    private long layoutRevision = Long.MIN_VALUE;
+    private int layoutImageVersion = Integer.MIN_VALUE;
+    private int layoutPanelW = -1;
+    private int layoutFontH = -1;
+    private ChatBubbleTheme layoutTheme;
+
+    /**
+     * Drop the per-row height cache only when something it depends on changed: the
+     * message content revision, the media version, the panel width, the font and
+     * the theme. Rows carrying an image code are the exception — a decode finishing
+     * changes their height in a way the media version does not always signal — so
+     * an image-bearing list keeps the old per-frame clear.
+     */
+    private void beginLayoutPass(List<ChatMessageStore.ChatMessage> messages) {
+        long rev = ChatMessageStore.contentRevision();
+        int imgV = com.niuqu.chatbubble.image.ImageLoader.version();
+        boolean mediaPending = false;
+        for (var m : messages) {
+            if (m.content().getString().contains("[[CICode")) { mediaPending = true; break; }
+        }
+        if (mediaPending || rev != layoutRevision || imgV != layoutImageVersion
+                || panelW != layoutPanelW || font.lineHeight != layoutFontH
+                || ChatBubbleConfig.THEME.get() != layoutTheme) {
+            msgHeightCache.clear();
+            layoutRevision = rev;
+            layoutImageVersion = imgV;
+            layoutPanelW = panelW;
+            layoutFontH = font.lineHeight;
+            layoutTheme = ChatBubbleConfig.THEME.get();
+        }
+    }
+
     private void renderMessages(GuiGraphics g, int mouseX, int mouseY) {
-        msgHeightCache.clear();
         bubbleRects.clear();
         clickableSpans.clear();
         textSpans.clear();
         List<ChatMessageStore.ChatMessage> messages;
-        if (whisperPartner != null) {
-            messages = ChatMessageStore.getWhisperMessages(whisperPartner);
+        if (com.niuqu.chatbubble.chat.GroupChannelState.whisperPartner() != null) {
+            messages = ChatMessageStore.getWhisperMessages(com.niuqu.chatbubble.chat.GroupChannelState.whisperPartner());
         } else {
             // 2.4.10: 群组页签过滤（页签不可用时 active() 恒为 TAB_ALL → 原样返回）
             messages = com.niuqu.chatbubble.chat.GroupChannelState.filterMessages(
                 ChatMessageStore.getPublicMessages(),
                 com.niuqu.chatbubble.chat.GroupChannelState.active());
         }
+        beginLayoutPass(messages);
 
         // 2.4.10: 群组页签条（占位后移消息视口；无消息也要画，画完再退出）
         int tabStripH = 0;
@@ -1817,11 +2019,11 @@ public class ChatBubbleScreen extends ChatScreen {
         if (messages.isEmpty()) return;
 
         int indicatorH = 0;
-        if (whisperPartner != null) {
+        if (com.niuqu.chatbubble.chat.GroupChannelState.whisperPartner() != null) {
             indicatorH = 14;
             int indY = msgTop;
             ColoredTextureRenderer.drawWithAlpha(g, UiTextureManager.rl(UiElement.WHISPER_BAR), panelX, indY, panelW, indicatorH, getAnimProgress());
-            String modeText = Component.translatable("e33chat.whisper.mode").getString() + ": " + whisperPartner;
+            String modeText = Component.translatable("e33chat.whisper.mode").getString() + ": " + com.niuqu.chatbubble.chat.GroupChannelState.whisperPartner();
             int modeTW = font.width(modeText);
             g.drawString(font, Component.literal(modeText), panelX + (panelW - modeTW) / 2, indY + 2, c().textPrimary(), false);
         }
@@ -2016,10 +2218,6 @@ public class ChatBubbleScreen extends ChatScreen {
 
     private void renderTimeSeparator(GuiGraphics g, long timeMillis, int y) {
         ChatMessageRenderer.renderTimeSeparator(g, font, timeMillis, y, panelX, panelW, c());
-    }
-
-    private List<FormattedCharSequence> wrapContent(Component c, int width) {
-        return ChatMessageRenderer.wrapContent(c, font, width);
     }
 
     private boolean isPanelSliding() {
@@ -2234,28 +2432,126 @@ public class ChatBubbleScreen extends ChatScreen {
     }
 
     private void renderContextMenu(GuiGraphics g, int mouseX, int mouseY) {
-        if (contextMsgIndex < 0) return;
+        if (contextMenuTarget == null) return;
+        // The row can be revoked (left group) or evicted while the menu is open:
+        // drop the menu instead of leaving a dead target on screen.
+        if (ChatMessageStore.resolveVisibleMessage(contextMenuTarget) == null) {
+            contextMenuTarget = null;
+            return;
+        }
         ChatContextMenus.renderMessageMenu(g, font, mouseX, mouseY, c(), panelX, panelW,
             msgTop, iconTex("copy"), iconTex("quote"), contextX, contextY, getAnimProgress());
     }
 
     private void renderAvatarContextMenu(GuiGraphics g, int mouseX, int mouseY) {
-        if (contextAvatarIndex < 0) return;
-        ChatMessageStore.ChatMessage msg = ChatMessageStore.getMessageAt(contextAvatarIndex);
-        boolean isBlocked = msg != null
-            && BlockList.isPlayerBlocked(msg.rawPlayerName(), msg.senderName(),
-                ChatBubbleConfig.BLOCKED_PLAYERS.get());
+        if (contextAvatarTarget == null) return;
+        ChatMessageStore.ChatMessage msg = ChatMessageStore.resolveVisibleMessage(contextAvatarTarget);
+        if (msg == null) { contextAvatarTarget = null; inviteSubmenuOpen = false; inviteSubmenuTarget = null; return; }
+        boolean isBlocked = BlockList.isPlayerBlocked(msg.rawPlayerName(), msg.senderName(),
+            ChatBubbleConfig.BLOCKED_PLAYERS.get());
         ChatContextMenus.renderAvatarMenu(g, font, mouseX, mouseY, c(), panelX, panelW,
             msgTop, iconTex("profile"), iconTex("tp"), iconTex("whisper"), iconTex("block"), isBlocked,
-            contextAvatarX, contextAvatarY, ChatMessageStore.useTpa(), getAnimProgress());
+            contextAvatarX, contextAvatarY, ChatMessageStore.useTpa(), getAnimProgress(),
+            groupView() ? "e33chat.menu.kick_from_group" : "e33chat.menu.invite_to_group",
+            iconTex(groupView() ? "group_kick" : "group_invite"),
+            !groupView() || ChatSidebar.ownsGroup(com.niuqu.chatbubble.chat.GroupChannelState.active()));
+        if (inviteSubmenuOpen) renderInviteSubmenu(g, mouseX, mouseY);
+    }
+
+    /** True when the active channel is a group (not 全部 / 世界 / 系统). The whisper
+     *  view keeps its own tab id untouched, so it must never count as a group view. */
+    private boolean groupView() {
+        // The channel predicate lives in the shared ChannelStateMachine (via
+        // GroupChannelState.isGroup): a whisper view never counts as a group, and
+        // 全部/世界/系统 are pseudo tabs. Keeping the decision in one place is what
+        // stopped the old groupView() from misreading a whisper view as a group.
+        return com.niuqu.chatbubble.chat.GroupChannelState.isGroup();
+    }
+
+    /** {@code {x, y, w, h}} of the invite group picker; rows use CTX_ITEM_H + 2. */
+    private int[] inviteSubmenuRect(int rows) {
+        int subW = 110;
+        int subH = rows * (ChatContextMenus.CTX_ITEM_H + 2) + 2;
+        int parentX = ChatContextMenus.menuX(contextAvatarX, panelX, panelW);
+        int parentY = ChatContextMenus.menuY(contextAvatarY, ChatContextMenus.CTX_ITEM_H * 5 + 8, msgTop, true);
+        int subX = parentX + ChatContextMenus.CTX_W + 2;
+        if (subX + subW > panelX + panelW - 2) subX = parentX - subW - 2;
+        subX = Math.max(panelX + 2, Math.min(subX, panelX + panelW - subW - 2));
+        int subY = Math.max(msgTop, Math.min(parentY, height - subH - 2));
+        return new int[]{ subX, subY, subW, subH };
+    }
+
+    private void renderInviteSubmenu(GuiGraphics g, int mouseX, int mouseY) {
+        // v2 groups only: a pre-2.5 legacy tab is keyed by name, so the server cannot
+        // resolve it into an invite target — offering it would be a dead action.
+        List<String> groups = new ArrayList<>();
+        for (var entry : com.niuqu.chatbubble.chat.GroupChannelState.directory().values())
+            groups.add(entry.identity().id().toString());
+        if (groups.isEmpty()) { inviteSubmenuOpen = false; inviteSubmenuTarget = null; return; }
+        // Scroll window: at most SUBMENU_MAX_ROWS rows fit; the wheel reveals the rest.
+        int visible = Math.min(groups.size(), SidebarModel.SUBMENU_MAX_ROWS);
+        int first = Math.min(Math.max(0, inviteSubmenuScroll), groups.size() - visible);
+        int[] r = inviteSubmenuRect(visible);
+        float alpha = getAnimProgress();
+        com.niuqu.chatbubble.texture.ColoredTextureRenderer.drawWithAlpha(g, UiTextureManager.rl(UiElement.CONTEXT_MENU_BG), r[0], r[1], r[2], r[3], alpha);
+        com.niuqu.chatbubble.texture.ColoredTextureRenderer.drawWithAlpha(g, UiTextureManager.rl(UiElement.DIVIDER), r[0], r[1], r[2], 1, alpha);
+        com.niuqu.chatbubble.texture.ColoredTextureRenderer.drawWithAlpha(g, UiTextureManager.rl(UiElement.DIVIDER), r[0], r[1] + r[3] - 1, r[2], 1, alpha);
+        com.niuqu.chatbubble.texture.ColoredTextureRenderer.drawWithAlpha(g, UiTextureManager.rl(UiElement.DIVIDER), r[0], r[1], 1, r[3], alpha);
+        com.niuqu.chatbubble.texture.ColoredTextureRenderer.drawWithAlpha(g, UiTextureManager.rl(UiElement.DIVIDER), r[0] + r[2] - 1, r[1], 1, r[3], alpha);
+        for (int i = 0; i < visible; i++) {
+            String label = com.niuqu.chatbubble.chat.GroupChannelState.tabDisplayName(groups.get(first + i));
+            if (label == null) label = groups.get(first + i);
+            int ry = r[1] + 1 + i * (ChatContextMenus.CTX_ITEM_H + 2);
+            boolean hover = mouseX >= r[0] && mouseX <= r[0] + r[2]
+                && mouseY >= ry && mouseY <= ry + ChatContextMenus.CTX_ITEM_H;
+            com.niuqu.chatbubble.texture.ColoredTextureRenderer.drawWithAlpha(g, UiTextureManager.rl(hover ? UiElement.CONTEXT_HOVER : UiElement.SIDEBAR_SELECTED),
+                r[0] + 1, ry, r[2] - 2, ChatContextMenus.CTX_ITEM_H, alpha);
+            String shown = font.plainSubstrByWidth(label, r[2] - 10);
+            if (!shown.equals(label))
+                shown = font.plainSubstrByWidth(label, Math.max(4, r[2] - 10 - font.width("..."))) + "...";
+            g.drawString(font, Component.literal(shown), r[0] + 5, ry + 5, c().textPrimary(), false);
+        }
+    }
+
+    /** Group picker click: a row invites, anything else closes both menus. */
+    private void handleInviteSubmenuClick(double mx, double my) {
+        // Same v2-only list as the render above (legacy tabs have no invite target).
+        List<String> groups = new ArrayList<>();
+        for (var entry : com.niuqu.chatbubble.chat.GroupChannelState.directory().values())
+            groups.add(entry.identity().id().toString());
+        if (!groups.isEmpty()) {
+            // Same window as the render, so a click always hits the row under the cursor.
+            int visible = Math.min(groups.size(), SidebarModel.SUBMENU_MAX_ROWS);
+            int first = Math.min(Math.max(0, inviteSubmenuScroll), groups.size() - visible);
+            int[] r = inviteSubmenuRect(visible);
+            for (int i = 0; i < visible; i++) {
+                int ry = r[1] + 1 + i * (ChatContextMenus.CTX_ITEM_H + 2);
+                if (mx >= r[0] && mx <= r[0] + r[2] && my >= ry && my <= ry + ChatContextMenus.CTX_ITEM_H) {
+                    String label = com.niuqu.chatbubble.chat.GroupChannelState.tabDisplayName(groups.get(first + i));
+                    String target = inviteSubmenuTarget;
+                    inviteSubmenuOpen = false;
+                    inviteSubmenuTarget = null;
+                    contextAvatarTarget = null;
+                    if (target != null && label != null && minecraft.player != null)
+                        minecraft.player.connection.sendCommand("e33chat group invite " + label + " " + target);
+                    return;
+                }
+            }
+        }
+        inviteSubmenuOpen = false;
+        inviteSubmenuTarget = null;
+        contextAvatarTarget = null;
     }
 
     private static final int REPLY_BAR_H = 18;
 
     private void renderReplyBar(GuiGraphics g, int mouseX, int mouseY) {
-        if (replyTargetIndex < 0) return;
-        ChatMessageStore.ChatMessage target = ChatMessageStore.getMessageAt(replyTargetIndex);
-        if (target == null) { replyTargetIndex = -1; return; }
+        if (replyTarget == null) return;
+        ChatMessageStore.ChatMessage target = ChatMessageStore.resolveVisibleMessage(replyTarget);
+        // Gone or no longer authorized (left group, evicted): the quote must not
+        // outlive the row it was taken from.
+        if (target == null) { replyTarget = null; return; }
+        replyTarget = target;
 
         int notifOffset = (newMessageCount > 0) ? NOTIF_H : 0;
         int gearX = panelX + 4;
@@ -2286,7 +2582,7 @@ public class ChatBubbleScreen extends ChatScreen {
     }
 
     private boolean isMouseOverReplyCancel(double mx, double my) {
-        if (replyTargetIndex < 0) return false;
+        if (replyTarget == null) return false;
         int notifOffset = (newMessageCount > 0) ? NOTIF_H : 0;
         int gearX = panelX + 4;
         int sendX = panelX + panelW - PAD - ICON_S + 2;
@@ -2395,9 +2691,9 @@ public class ChatBubbleScreen extends ChatScreen {
         searchMatches.clear();
         searchMatchIdx = -1;
         searchHighlightIndex = -1;
-        replyTargetIndex = -1;
-        contextMsgIndex = -1;
-        contextAvatarIndex = -1;
+        replyTarget = null;
+        contextMenuTarget = null;
+        contextAvatarTarget = null;
         showMentions = false;
         mentionCandidates.clear();
         mentionIdx = 0;
@@ -2505,11 +2801,13 @@ public class ChatBubbleScreen extends ChatScreen {
     private void jumpToMessage(int msgIndex) {
         var msgs = ChatMessageStore.getMessages();
         if (msgIndex < 0 || msgIndex >= msgs.size()) return;
+        if (!com.niuqu.chatbubble.chat.GroupChannelState.isVisible(msgs.get(msgIndex))) return;
         int cy = 0;
         String lk = null;
         ChatMessageStore.ChatMessage prevMsg = null;
         for (int i = 0; i < msgIndex && i < msgs.size(); i++) {
             var m = msgs.get(i);
+            if (!com.niuqu.chatbubble.chat.GroupChannelState.isVisible(m)) continue;
             if (!m.isSystem()) {
                 String k = timeKey(m.time());
                 if (lk == null || !k.equals(lk)) {
@@ -2648,9 +2946,9 @@ public class ChatBubbleScreen extends ChatScreen {
         String displayText = text;
 
         // In whisper mode, auto-prepend /msg behind the scenes
-        if (whisperPartner != null && !text.startsWith("/")) {
-            text = "/msg " + whisperPartner + " " + text;
-            whisperTarget = whisperPartner;
+        if (com.niuqu.chatbubble.chat.GroupChannelState.whisperPartner() != null && !text.startsWith("/")) {
+            text = "/msg " + com.niuqu.chatbubble.chat.GroupChannelState.whisperPartner() + " " + text;
+            whisperTarget = com.niuqu.chatbubble.chat.GroupChannelState.whisperPartner();
             displayText = raw;
         }
 
@@ -2658,7 +2956,7 @@ public class ChatBubbleScreen extends ChatScreen {
         // 路由（成员收到 GroupChatPayload 包含发送者自己，替代本地气泡）；世界/全部
         // 页签走原版聊天；系统页签只读。
         String groupTarget = null;
-        if (whisperPartner == null && !text.startsWith("/") && com.niuqu.chatbubble.chat.GroupChannelState.supported()) {
+        if (com.niuqu.chatbubble.chat.GroupChannelState.whisperPartner() == null && !text.startsWith("/") && com.niuqu.chatbubble.chat.GroupChannelState.supported()) {
             String tab = com.niuqu.chatbubble.chat.GroupChannelState.active();
             if (com.niuqu.chatbubble.chat.GroupChannelState.TAB_SYSTEM.equals(tab)) {
                 minecraft.player.sendSystemMessage(
@@ -2684,11 +2982,13 @@ public class ChatBubbleScreen extends ChatScreen {
         // Vanilla doesn't echo commands into chat — only real chat and whispers get a local bubble
         boolean localBubble = !text.startsWith("/") || whisperTarget != null;
 
-        if (replyTargetIndex >= 0) {
+        if (replyTarget != null) {
             // 群组发送（localBubble=false）也要把引用同步给服务端——服务端在
             // group msg 处理器里消费 pendingQuotes 并写进 GroupChatPayload
             if (localBubble || groupTarget != null) {
-                ChatMessageStore.ChatMessage target = ChatMessageStore.getMessageAt(replyTargetIndex);
+                // Resolve one last time: the row was picked before the page that may
+                // have moved it arrived, and a revoked row must not be quoted.
+                ChatMessageStore.ChatMessage target = ChatMessageStore.resolveVisibleMessage(replyTarget);
                 if (target != null) {
                     String quoteSender = (target.rawPlayerName() != null && !target.rawPlayerName().isEmpty())
                         ? target.rawPlayerName() : target.senderName().getString();
@@ -2709,7 +3009,7 @@ public class ChatBubbleScreen extends ChatScreen {
                     }
                 }
             }
-            replyTargetIndex = -1;
+            replyTarget = null;
         }
 
         if (text.startsWith("/"))

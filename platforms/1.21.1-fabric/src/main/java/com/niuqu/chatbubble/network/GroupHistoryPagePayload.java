@@ -103,8 +103,14 @@ public record GroupHistoryPagePayload(GroupHistoryPage page) implements CustomPa
      * live row and its paged twin still yields one bubble.
      */
     public static void handleClient(GroupHistoryPagePayload payload) {
-        // TODO(M5): the client paging chain consumes this page (scope check against
-        // the held directory, cursor advance, follow-up request, store insert); the
-        // v2 client pipeline lands in M5/M6. The wire shape is frozen here.
+        com.niuqu.chatbubble.chat.GroupChannelState.PageOutcome outcome =
+            com.niuqu.chatbubble.chat.GroupChannelState.acceptHistoryPage(payload.page());
+        if (outcome == null) return;
+        com.niuqu.chatbubble.store.ChatMessageStore.addGroupHistoryEntries(outcome.accepted());
+        com.niuqu.chatbubble.chat.GroupChannelState.PageRequest next = outcome.next();
+        if (next != null && net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking
+                .canSend(GroupHistoryRequestPayload.ID)) {
+            GroupHistoryRequestPayload.send(next.groupId(), next.after(), next.limit());
+        }
     }
 }

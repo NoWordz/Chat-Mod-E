@@ -1,5 +1,6 @@
 package com.niuqu.chatbubble.packets;
 
+import com.niuqu.chatbubble.chat.GroupChannelState;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.fml.DistExecutor;
@@ -11,7 +12,7 @@ import java.util.function.Supplier;
  * S2C reply to {@link GroupProtocolHelloPacket}. {@code protocol} echoes the
  * client's offer and {@code accepted} tells whether the server speaks it.
  *
- * <p>Only an accepted protocol 1 unlocks the v2
+ * <p>Only an accepted {@link GroupChannelState#GROUP_PROTOCOL} unlocks the v2
  * paths: an ACK for another version must not make the client consume a directory
  * it cannot interpret.
  */
@@ -43,8 +44,10 @@ public class GroupProtocolAckPacket {
     }
 
     public void handle(Supplier<NetworkEvent.Context> ctx) {
-        // TODO(M5): the client group state machine (GroupChannelState.onAck in the
-        // M6-owned chat package) consumes this ACK; the v2 client UI lands in M5.
+        ctx.get().enqueueWork(() ->
+            DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () ->
+                GroupChannelState.onAck(protocol, accepted))
+        );
         ctx.get().setPacketHandled(true);
     }
 }

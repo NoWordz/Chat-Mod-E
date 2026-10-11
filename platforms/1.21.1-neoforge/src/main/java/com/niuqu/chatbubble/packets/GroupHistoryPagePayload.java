@@ -1,7 +1,10 @@
 package com.niuqu.chatbubble.packets;
 
+import com.niuqu.chatbubble.chat.GroupChannelState;
+import com.niuqu.chatbubble.group.GroupDirectoryEntry;
 import com.niuqu.chatbubble.group.GroupHistoryEntry;
 import com.niuqu.chatbubble.group.GroupHistoryPage;
+import com.niuqu.chatbubble.store.ChatMessageStore;
 import io.netty.buffer.ByteBuf;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -113,8 +116,19 @@ public record GroupHistoryPagePayload(GroupHistoryPage page) implements CustomPa
     public Type<GroupHistoryPagePayload> type() { return TYPE; }
 
     public static void handleClient(GroupHistoryPagePayload payload, IPayloadContext context) {
-        // TODO(M5): the client paging chain consumes this page (scope check against
-        // the held directory, cursor advance, follow-up request, store insert); the
-        // v2 client pipeline lands in M5/M6. The wire shape is frozen here.
+        context.enqueueWork(() -> {
+            GroupHistoryPage page = payload.page();
+            if (page == null) return;
+            GroupDirectoryEntry entry = GroupChannelState.directoryEntry(page.groupId());
+            if (entry == null) return;   // out of scope: not ours (any more)
+            GroupChannelState.PageOutcome outcome = GroupChannelState.acceptHistoryPage(page);
+            if (outcome == null) return; // stale / already covered: never retried
+            ChatMessageStore.addGroupHistoryEntries(page.groupId(), entry.visibleFromSequence(),
+                entry.identity().displayName(), outcome.accepted());
+            GroupChannelState.PageRequest next = outcome.next();
+            if (next != null) {
+                GroupHistoryRequestPayload.send(next.groupId(), next.after(), next.limit());
+            }
+        });
     }
 }

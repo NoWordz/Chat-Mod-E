@@ -1,5 +1,8 @@
 package com.niuqu.chatbubble.packets;
 
+import com.niuqu.chatbubble.chat.GroupChannelState;
+import com.niuqu.chatbubble.group.GroupDirectoryEntry;
+import com.niuqu.chatbubble.store.ChatMessageStore;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraftforge.api.distmarker.Dist;
@@ -69,9 +72,17 @@ public class GroupChatV2Packet {
     }
 
     public void handle(Supplier<NetworkEvent.Context> ctx) {
-        // TODO(M5): the client group state machine authorizes this live row against
-        // the directory it holds (visibleFromSequence) and hands it to the store; the
-        // v2 client pipeline lands in M5/M6. The wire shape is frozen here.
+        ctx.get().enqueueWork(() ->
+            DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () -> {
+                // Authorize against the directory we hold: a live row may only be
+                // shown for a group we belong to and from our own window onwards.
+                GroupDirectoryEntry entry = GroupChannelState.directoryEntry(groupId);
+                if (entry == null || sequence < entry.visibleFromSequence()) return;
+                ChatMessageStore.addGroupMessageV2(
+                    Component.literal(content), senderUUID, Component.literal(senderName),
+                    groupId, sequence, entry.identity().displayName(), quoteSender, quoteContent);
+            })
+        );
         ctx.get().setPacketHandled(true);
     }
 }

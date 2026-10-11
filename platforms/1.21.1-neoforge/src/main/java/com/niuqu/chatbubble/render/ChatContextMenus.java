@@ -63,6 +63,8 @@ public final class ChatContextMenus {
             mx + 22, my + CTX_ITEM_H + 5, c.textPrimary(), false);
     }
 
+    /** Avatar menu: 传送 / 私聊 / 屏蔽 / 资料, plus an optional group row (invite on the
+     *  public channel, kick inside a group) when {@code groupActionKey != null}. */
     public static void renderAvatarMenu(GuiGraphics g, Font font, int mouseX, int mouseY,
                                          ChatBubbleTheme.Colors c, int panelX, int panelW,
                                          int msgTop, ResourceLocation profileIcon,
@@ -71,8 +73,12 @@ public final class ChatContextMenus {
                                          ResourceLocation blockIcon,
                                          boolean isBlocked,
                                          int contextAvatarX, int contextAvatarY,
-                                         boolean useTpa, float alpha) {
-        int menuH = CTX_ITEM_H * 4 + 6;
+                                         boolean useTpa, float alpha,
+                                         String groupActionKey, ResourceLocation groupActionIcon,
+                                         boolean groupActionEnabled) {
+        // Row i sits at my + i * (CTX_ITEM_H + 2); n rows need n*H + 2*(n-1).
+        int rows = groupActionKey == null ? 4 : 5;
+        int menuH = CTX_ITEM_H * rows + 2 * (rows - 1);
         int mx = menuX(contextAvatarX, panelX, panelW);
         int my = menuY(contextAvatarY, menuH, msgTop, true);
 
@@ -115,6 +121,19 @@ public final class ChatContextMenus {
         drawIcon(g, profileIcon, mx + 5, my + CTX_ITEM_H * 3 + 8, 12, alpha);
         g.drawString(font, Component.translatable("e33chat.context.profile"),
             mx + 22, my + CTX_ITEM_H * 3 + 10, c.textPrimary(), false);
+
+        if (groupActionKey != null) {
+            // Row 5 (i = 4): invite on the public channel, kick inside a group. Without
+            // the right (not the owner) it renders muted and refuses the click.
+            int gy = my + CTX_ITEM_H * 4 + 8;
+            g.fill(mx + 4, gy - 1, mx + CTX_W - 4, gy, c.closeHoverBg());
+            boolean hoverGroup = groupActionEnabled && isOverItem(mouseX, mouseY, mx, gy, CTX_ITEM_H);
+            com.niuqu.chatbubble.texture.ColoredTextureRenderer.drawWithAlpha(g, UiTextureManager.rl(hoverGroup ? UiElement.CONTEXT_HOVER : UiElement.SIDEBAR_SELECTED),
+                mx + 1, gy, CTX_W - 2, CTX_ITEM_H, alpha);
+            drawIcon(g, groupActionIcon, mx + 5, gy + 3, 12, alpha);
+            g.drawString(font, Component.translatable(groupActionKey),
+                mx + 22, gy + 4, groupActionEnabled ? c.textPrimary() : c.textMuted(), false);
+        }
     }
 
     private static void drawIcon(GuiGraphics g, ResourceLocation tex, int x, int y, int size, float alpha) {

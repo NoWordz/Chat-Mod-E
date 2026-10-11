@@ -1,5 +1,6 @@
 package com.niuqu.chatbubble.packets;
 
+import com.niuqu.chatbubble.chat.GroupChannelState;
 import com.niuqu.chatbubble.group.GroupDirectoryEntry;
 import com.niuqu.chatbubble.group.GroupIdentity;
 import com.niuqu.chatbubble.group.GroupInvitationSummary;
@@ -169,10 +170,15 @@ public class GroupDirectoryPacket {
      */
     public static void applyClientDirectory(List<GroupDirectoryEntry> entries,
                                             List<GroupInvitationSummary> invitations) {
-        // TODO(M5): the client group state machine applies this recipient-scoped
-        // directory (name-resolved grants, backfill requests) and the v2 client UI
-        // lands in M5/M6. A complete snapshot supersedes any in-flight chunk set:
-        // resetTransfers() runs here once that path is wired.
         GroupDirectoryChunkPacket.resetTransfers();
+        List<GroupChannelState.PageRequest> requests = GroupChannelState.applyV2Directory(entries, invitations);
+        // Bind pre-2.5 rows to a grant once per directory change: the store's
+        // version guard skips a repeated apply, a history load re-attempts after
+        // inserting late rows, and a name matching more than one grant is left
+        // unbound.
+        com.niuqu.chatbubble.store.ChatMessageStore.bindLegacyGroupRowsIfStale();
+        for (GroupChannelState.PageRequest request : requests) {
+            GroupHistoryRequestPacket.send(request.groupId(), request.after(), request.limit());
+        }
     }
 }

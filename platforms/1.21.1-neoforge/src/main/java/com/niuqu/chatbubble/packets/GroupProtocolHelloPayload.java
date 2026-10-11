@@ -1,5 +1,6 @@
 package com.niuqu.chatbubble.packets;
 
+import com.niuqu.chatbubble.chat.GroupChannelState;
 import com.niuqu.chatbubble.server.GroupManager;
 import io.netty.buffer.ByteBuf;
 import net.minecraft.network.FriendlyByteBuf;
@@ -18,9 +19,6 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
  * accepted protocol, the recipient-scoped directory.
  */
 public record GroupProtocolHelloPayload(int protocol) implements CustomPacketPayload {
-
-    /** v2 group protocol this build speaks; the server ACKs only a matching offer. */
-    public static final int GROUP_PROTOCOL = 1;
 
     public static final Type<GroupProtocolHelloPayload> TYPE =
         new Type<>(ResourceLocation.fromNamespaceAndPath("e33chat", "group_protocol_hello_v2"));
@@ -52,6 +50,6 @@ public record GroupProtocolHelloPayload(int protocol) implements CustomPacketPay
     /** Client-side send (the login hook checks that the peer declared it first). */
     public static void send() {
         net.neoforged.neoforge.network.PacketDistributor.sendToServer(
-            new GroupProtocolHelloPayload(GROUP_PROTOCOL));
+            new GroupProtocolHelloPayload(GroupChannelState.GROUP_PROTOCOL));
     }
 }
