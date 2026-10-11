@@ -37,6 +37,11 @@ public final class SidebarModel {
     public static final int CREATE_BTN_H = 20;
     /** Left/right inset of the create button inside the sidebar (hit is `4..WIDTH-4`). */
     public static final int CREATE_INSET = 4;
+    /**
+     * Invite-picker rows shown at once. The picker scrolls (row-granular) beyond
+     * this, so a long group list can never grow the popup past the panel edge.
+     */
+    public static final int SUBMENU_MAX_ROWS = 6;
 
     // ---- layout ----
 
@@ -97,9 +102,18 @@ public final class SidebarModel {
         return PUBLIC_Y + ROW_STEP + GROUP_GAP + GROUP_TITLE_H;
     }
 
+    /**
+     * Lower bound of the group block: the row right after the visible group window.
+     * The pinned 「＋ 创建群组」 button is bottom-aligned by {@link #createButtonY},
+     * but this y is the block's own lower bound (wheel region / clipping).
+     */
+    public static int createRowY(int groupCount) {
+        return groupBlockTop() + groupVisibleRows(groupCount) * ROW_STEP;
+    }
+
     /** Top of the player list, after the public row and the (capped) group block. */
     public static int playerStartY(int groupCount) {
-        return groupBlockTop() + groupVisibleRows(groupCount) * ROW_STEP + ROW_STEP;
+        return createRowY(groupCount) + ROW_STEP;
     }
 
     /** Top of the bottom-pinned 「＋ 创建群组」 button, from the list area's bottom edge. */

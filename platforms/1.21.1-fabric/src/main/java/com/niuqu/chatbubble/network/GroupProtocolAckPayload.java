@@ -30,7 +30,6 @@ public record GroupProtocolAckPayload(int protocolVersion, boolean accepted) imp
 
     /** Client-side hook, invoked from ChatBubbleClientSetup's receiver. */
     public static void handleClient(GroupProtocolAckPayload payload) {
-        // TODO(M5): the client group state machine (GroupChannelState.onAck in the
-        // M6-owned chat package) consumes this ACK; the v2 client UI lands in M5.
+        com.niuqu.chatbubble.chat.GroupChannelState.onAck(payload.protocolVersion(), payload.accepted());
     }
 }

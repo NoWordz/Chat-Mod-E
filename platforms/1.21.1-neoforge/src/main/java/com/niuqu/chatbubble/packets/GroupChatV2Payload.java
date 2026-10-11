@@ -1,5 +1,8 @@
 package com.niuqu.chatbubble.packets;
 
+import com.niuqu.chatbubble.chat.GroupChannelState;
+import com.niuqu.chatbubble.group.GroupDirectoryEntry;
+import com.niuqu.chatbubble.store.ChatMessageStore;
 import io.netty.buffer.ByteBuf;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -79,8 +82,17 @@ public record GroupChatV2Payload(UUID groupId, long sequence, UUID senderUUID, S
     public Type<GroupChatV2Payload> type() { return TYPE; }
 
     public static void handleClient(GroupChatV2Payload payload, IPayloadContext context) {
-        // TODO(M5): the client group state machine authorizes this live row against
-        // the directory it holds (visibleFromSequence) and hands it to the store; the
-        // v2 client pipeline lands in M5/M6. The wire shape is frozen here.
+        context.enqueueWork(() -> {
+            // Authorize against the directory we hold: a live row may only be
+            // shown for a group we belong to and from our own window onwards.
+            GroupDirectoryEntry entry = GroupChannelState.directoryEntry(payload.groupId());
+            if (entry == null || payload.sequence() < entry.visibleFromSequence()) return;
+            ChatMessageStore.addGroupMessageV2(
+                net.minecraft.network.chat.Component.literal(payload.content()),
+                payload.senderUUID(),
+                net.minecraft.network.chat.Component.literal(payload.senderName()),
+                payload.groupId(), payload.sequence(), entry.identity().displayName(),
+                payload.quoteSender(), payload.quoteContent());
+        });
     }
 }

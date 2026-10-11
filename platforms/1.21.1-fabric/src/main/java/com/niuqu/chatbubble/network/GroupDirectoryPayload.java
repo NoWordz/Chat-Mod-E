@@ -135,10 +135,21 @@ public record GroupDirectoryPayload(List<GroupDirectoryEntry> groups,
 
     /** Client-side hook, invoked from ChatBubbleClientSetup's receiver. */
     public static void handleClient(GroupDirectoryPayload payload) {
-        // TODO(M5): the client group state machine applies this recipient-scoped
-        // directory (name-resolved grants, backfill requests) and the v2 client UI
-        // lands in M5/M6. A complete snapshot supersedes any in-flight chunk set:
-        // resetTransfers() runs here once that path is wired.
+        // A complete snapshot is newer than any transfer still in flight, so a
+        // partly received chunk set is dropped instead of racing this one.
         GroupDirectoryChunkPayload.resetTransfers();
+        java.util.List<com.niuqu.chatbubble.chat.GroupChannelState.PageRequest> requests =
+            com.niuqu.chatbubble.chat.GroupChannelState.applyV2Directory(payload.groups(), payload.invitations());
+        // Bind pre-2.5 rows to a grant once per directory change: the store's
+        // version guard skips a repeated apply, a history load re-attempts after
+        // inserting late rows, and a name matching more than one grant is left
+        // unbound.
+        com.niuqu.chatbubble.store.ChatMessageStore.bindLegacyGroupRowsIfStale();
+        if (requests.isEmpty()) return;
+        if (!net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking
+                .canSend(GroupHistoryRequestPayload.ID)) return;
+        for (com.niuqu.chatbubble.chat.GroupChannelState.PageRequest request : requests) {
+            GroupHistoryRequestPayload.send(request.groupId(), request.after(), request.limit());
+        }
     }
 }

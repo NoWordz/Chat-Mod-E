@@ -67,8 +67,13 @@ public record GroupChatV2Payload(UUID groupId, long sequence, UUID senderUUID, S
 
     /** Client-side hook, invoked from ChatBubbleClientSetup's receiver. */
     public static void handleClient(GroupChatV2Payload payload) {
-        // TODO(M5): the client group state machine authorizes this live row against
-        // the directory it holds (visibleFromSequence) and hands it to the store; the
-        // v2 client pipeline lands in M5/M6. The wire shape is frozen here.
+        com.niuqu.chatbubble.group.GroupDirectoryEntry entry =
+            com.niuqu.chatbubble.chat.GroupChannelState.directoryEntry(payload.groupId());
+        if (entry == null || payload.sequence() < entry.visibleFromSequence()) return;
+        com.niuqu.chatbubble.store.ChatMessageStore.addGroupMessageV2(
+            net.minecraft.text.Text.literal(payload.content()), payload.senderUUID(),
+            net.minecraft.text.Text.literal(payload.senderName()),
+            payload.groupId(), payload.sequence(), entry.identity().displayName(),
+            payload.quoteSender(), payload.quoteContent());
     }
 }

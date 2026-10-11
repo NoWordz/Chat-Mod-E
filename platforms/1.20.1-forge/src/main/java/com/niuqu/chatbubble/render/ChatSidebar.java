@@ -1,7 +1,9 @@
 package com.niuqu.chatbubble.render;
+import com.niuqu.chatbubble.logic.SidebarModel;
 import com.niuqu.chatbubble.render.ChatBubbleScreen;
 
 import com.niuqu.chatbubble.config.ChatBubbleConfig;
+import com.niuqu.chatbubble.chat.GroupChannelState;
 import com.niuqu.chatbubble.render.ChatBubbleTheme;
 import com.niuqu.chatbubble.store.ChatMessageStore;
 import com.niuqu.chatbubble.texture.UiElement;
@@ -29,7 +31,8 @@ public final class ChatSidebar {
     public static boolean handleMouseClicked(double mouseX, double mouseY,
                                               String whisperPartner, Font font,
                                               int screenX, boolean visible,
-                                              EditBox searchBox, int scrollOffset) {
+                                              EditBox searchBox, int scrollOffset, int groupScroll,
+                                              int listBottom) {
         if (!visible) return false;
         int localX = (int)mouseX - screenX;
         if (localX < 0 || localX > WIDTH) return false;
@@ -39,24 +42,69 @@ public final class ChatSidebar {
 
         // Search box
         if (mouseY >= 2 && mouseY <= 2 + SEARCH_H) return true;
-        // Public tab
-        int y = 2 + SEARCH_H + 3;
-        if (mouseY >= y && mouseY <= y + ITEM_H) return true;
-        // Player list
-        y += ITEM_H + 2;
+        if (mouseY >= SidebarModel.PUBLIC_Y && mouseY <= SidebarModel.PUBLIC_Y + ITEM_H) return true;
+
+        // Group rows (the 「我的群」 caption above them is not a target) and the pinned
+        // create button — geometry from UiLayout, shared by all targets.
+        int listEnd = SidebarModel.listBottom(listBottom);
+        int groupCount = groupCount();
+        int firstRow = SidebarModel.groupFirstRow(groupCount, groupScroll);
+        int lastRow = SidebarModel.groupWindowEnd(groupCount, firstRow);
+        for (int i = firstRow; i < lastRow; i++) {
+            int gy = SidebarModel.groupWindowRowY(groupCount, i, firstRow);
+            if (gy + ITEM_H > listEnd) break; // drawn clipped there too
+            if (mouseY >= gy && mouseY <= gy + ITEM_H) return true;
+        }
+        int btnY = SidebarModel.createButtonY(listBottom);
+        if (mouseY >= btnY && mouseY <= btnY + SidebarModel.CREATE_BTN_H
+            && localX >= 4 && localX <= WIDTH - 4) return true;
+
         var players = new ArrayList<>(mc.player.connection.getOnlinePlayers());
         String selfName = mc.player.getName().getString();
         String filter = searchBox.getValue().toLowerCase().trim();
-        int scrollY = y - scrollOffset;
+        int startY = SidebarModel.playerStartY(groupCount);
+        int scrollY = startY - scrollOffset;
         for (var info : players) {
             String name = info.getProfile().getName();
             if (name.equals(selfName)) continue;
             if (ChatBubbleConfig.isSidebarHidden(name)) continue;
             if (!filter.isEmpty() && !name.toLowerCase().contains(filter)) continue;
-            if (mouseY >= scrollY && mouseY <= scrollY + ITEM_H) return true;
+            // Clip to the visible band: the half-row above startY and the half-row past
+            // the create button are drawn clipped, so their visible part reacts.
+            if (scrollY + ITEM_H > startY && scrollY < listEnd
+                && mouseY >= Math.max(scrollY, startY)
+                && mouseY <= Math.min(scrollY + ITEM_H, listEnd)) return true;
             scrollY += ITEM_H + 2;
         }
         return false;
+    }
+
+    /** Sidebar group rows in order: v2 groups first, then pre-2.5 (v1) legacy tabs. */
+    public static List<String> groupTabs() {
+        List<String> out = new ArrayList<>();
+        for (var entry : GroupChannelState.directory().values())
+            out.add(entry.identity().id().toString());
+        out.addAll(GroupChannelState.legacyTabs());
+        return out;
+    }
+
+    private static int groupCount() { return groupTabs().size(); }
+
+    /** True when the local player owns the group behind this tab key (legacy → false). */
+    public static boolean ownsGroup(String tab) {
+        Minecraft mc = Minecraft.getInstance();
+        UUID id = uuidOrNull(tab);
+        if (mc.player == null || id == null) return false;
+        var entry = GroupChannelState.directoryEntry(id);
+        return entry != null && mc.player.getUUID().equals(entry.ownerId());
+    }
+
+    private static UUID uuidOrNull(String tab) {
+        try {
+            return UUID.fromString(tab);
+        } catch (RuntimeException notAUuid) {
+            return null; // pre-2.5 tabs are keyed by display name
+        }
     }
 
     // ---- Rendering (called from ChatBubbleScreen) ----
@@ -64,8 +112,10 @@ public final class ChatSidebar {
     public static int render(GuiGraphics g, Font font, int mouseX, int mouseY,
                               ChatBubbleTheme.Colors c, int panelW, int msgBottom,
                               String whisperPartner, ResourceLocation publicIcon,
+                              ResourceLocation groupIcon,
                               ResourceLocation noOnlineIcon, ResourceLocation privateTipIcon,
-                              EditBox searchBox, int scrollOffset, int prevMaxScroll, float alpha,
+                              EditBox searchBox, int scrollOffset, int groupScroll,
+                              int prevMaxScroll, float alpha,
                               int screenH) {
         // Background/divider span the real screen height: a hardcoded cap
         // disappears below y=999 on large GUIs (scale 1 at 1080p+).
@@ -90,8 +140,11 @@ public final class ChatSidebar {
         }
         y = sby + SEARCH_H + 3;
 
-        // Public tab
-        boolean isPublic = whisperPartner == null;
+        // Public tab: lit while the view is neither a whisper nor a group tab. It must stay
+        // lit in 全部 (the default view) — gating it on TAB_WORLD made the sidebar look
+        // unselected right after joining.
+        String activeNow = GroupChannelState.active();
+        boolean isPublic = whisperPartner == null && !groupTabs().contains(activeNow);
         boolean hoverTab = mouseX >= 0 && mouseX <= WIDTH && mouseY >= y && mouseY <= y + ITEM_H;
         if (isPublic)
             com.niuqu.chatbubble.texture.ColoredTextureRenderer.drawWithAlpha(g, UiTextureManager.rl(UiElement.SIDEBAR_SELECTED), 0, y, WIDTH, ITEM_H, alpha);
@@ -101,7 +154,8 @@ public final class ChatSidebar {
         int nameX = 2 + ICON_S + 3;
         String publicLabel = Component.translatable("e33chat.sidebar.public").getString();
         g.drawString(font, Component.literal(publicLabel), nameX, y + 1, c.textPrimary(), false);
-        ChatMessageStore.ChatMessage latestPub = ChatMessageStore.getLatestPublicMessage();
+        ChatMessageStore.ChatMessage latestPub =
+            ChatMessageStore.getLatestForTab(GroupChannelState.TAB_WORLD);
         if (latestPub != null) {
             int previewMaxW = WIDTH - nameX - 4;
             String preview = ChatMessageStore.singleLine(latestPub.content().getString());
@@ -112,14 +166,72 @@ public final class ChatSidebar {
         }
         y += ITEM_H + 2;
 
+        // ---- Group rows (2.5.0: groups left the top tab strip for this column).
+        // All geometry comes from UiLayout, so the three targets cannot drift. The
+        // block shows at most SIDEBAR_GROUP_MAX_ROWS rows and scrolls beyond that.
+        int sidebarBottom = msgBottom > 0 ? msgBottom : screenH - ChatLayout.BAR_H;
+        int listEnd = SidebarModel.listBottom(sidebarBottom);
+        int groupCount = groupCount();
+        if (groupCount > 0) {
+            List<String> groups = groupTabs();
+            String caption = Component.translatable("e33chat.group.my_groups_header").getString();
+            int captionY = SidebarModel.groupTitleY(groupCount);
+            if (captionY + SidebarModel.GROUP_TITLE_H <= listEnd)
+                g.drawString(font, Component.literal(caption), 4, captionY, c.textMuted(), false);
+            String activeTab = GroupChannelState.active();
+            // Row-granular scroll window: at most SIDEBAR_GROUP_MAX_ROWS rows are shown,
+            // and the create row below the window never moves.
+            int firstRow = SidebarModel.groupFirstRow(groupCount, groupScroll);
+            int lastRow = SidebarModel.groupWindowEnd(groupCount, firstRow);
+            for (int i = firstRow; i < lastRow; i++) {
+                String tab = groups.get(i);
+                String label = GroupChannelState.tabDisplayName(tab);
+                if (label == null) label = tab;
+                int ry = SidebarModel.groupWindowRowY(groupCount, i, firstRow);
+                if (ry + ITEM_H > listEnd) break; // panel too short for even one row
+                // A whisper view owns the list: the group row must not stay lit behind it.
+                boolean sel = whisperPartner == null && tab.equals(activeTab);
+                boolean hoverRow = mouseX >= 0 && mouseX <= WIDTH
+                    && mouseY >= ry && mouseY <= ry + ITEM_H;
+                if (sel)
+                    com.niuqu.chatbubble.texture.ColoredTextureRenderer.drawWithAlpha(g, UiTextureManager.rl(UiElement.SIDEBAR_SELECTED), 0, ry, WIDTH, ITEM_H, alpha);
+                else if (hoverRow)
+                    com.niuqu.chatbubble.texture.ColoredTextureRenderer.drawWithAlpha(g, UiTextureManager.rl(UiElement.SIDEBAR_HOVER), 0, ry, WIDTH, ITEM_H, alpha);
+                // Same left column as the public row, so every label lines up at nameX.
+                drawIcon(g, groupIcon, 2, ry + 1, ICON_S, alpha);
+                // Legacy (v1) tabs have no roster, so they carry no role badge.
+                boolean typed = uuidOrNull(tab) != null;
+                String role = Component.translatable(ownsGroup(tab)
+                    ? "e33chat.sidebar.role_owner" : "e33chat.sidebar.role_member").getString();
+                int roleW = typed ? font.width(role) + 4 : 0;
+                int maxLabelW = Math.max(8, WIDTH - nameX - 4 - roleW);
+                String display = font.plainSubstrByWidth(label, maxLabelW);
+                if (!display.equals(label))
+                    display = font.plainSubstrByWidth(label, Math.max(4, maxLabelW - font.width("..."))) + "...";
+                g.drawString(font, Component.literal(display), nameX, ry + 1, c.textPrimary(), false);
+                // Per-group preview, same two-line pattern as the 世界频道 row above.
+                ChatMessageStore.ChatMessage latestGroup = ChatMessageStore.getLatestForTab(tab);
+                if (latestGroup != null) {
+                    String gp = ChatMessageStore.singleLine(latestGroup.content().getString());
+                    String gpShown = font.plainSubstrByWidth(gp, maxLabelW - font.width("..."));
+                    if (!gpShown.equals(gp)) gpShown += "...";
+                    g.drawString(font, Component.literal(gpShown), nameX, ry + 1 + font.lineHeight,
+                        c.textMuted(), false);
+                }
+                if (typed)
+                    g.drawString(font, Component.literal(role), WIDTH - 4 - font.width(role),
+                        ry + 1, c.textMuted(), false);
+            }
+        }
+
         int newMaxScroll = prevMaxScroll;
         if (mc.player != null && mc.player.connection != null) {
             var players = new ArrayList<>(mc.player.connection.getOnlinePlayers());
             String selfName = mc.player.getName().getString();
             String filter = searchBox.getValue().toLowerCase().trim();
 
-            int startY = y;
-            int visibleBottom = msgBottom > 0 ? msgBottom : 300;
+            int startY = SidebarModel.playerStartY(groupCount);
+            int listEnd2 = listEnd;
             int totalH = 0;
             for (var info : players) {
                 String name = info.getProfile().getName();
@@ -130,18 +242,25 @@ public final class ChatSidebar {
             }
 
             if (totalH == 0) {
-                drawIcon(g, noOnlineIcon, (WIDTH - 32) / 2, startY + 8, 32, alpha);
-                String noPlayers = Component.translatable("e33chat.sidebar.no_players").getString();
-                int textW = font.width(noPlayers);
-                g.drawString(font, Component.literal(noPlayers),
-                    (WIDTH - textW) / 2, startY + 8 + 32 + 4, c.textMuted(), false);
+                // Only draw the empty state while it actually fits inside the list area.
+                if (startY + 8 + 32 + 4 <= listEnd2) {
+                    drawIcon(g, noOnlineIcon, (WIDTH - 32) / 2, startY + 8, 32, alpha);
+                    String noPlayers = Component.translatable("e33chat.sidebar.no_players").getString();
+                    int textW = font.width(noPlayers);
+                    g.drawString(font, Component.literal(noPlayers),
+                        (WIDTH - textW) / 2, startY + 8 + 32 + 4, c.textMuted(), false);
+                }
+            } else if (startY >= listEnd2) {
+                // Squeezed out by the group block: no row is visible, so there is nothing
+                // to scroll — keeping a stale totalH would be a dead scrollbar.
+                newMaxScroll = 0;
             } else {
-                newMaxScroll = Math.max(0, totalH - (visibleBottom - startY));
+                newMaxScroll = Math.max(0, totalH - (listEnd2 - startY));
                 // Clamp so a shrinking player list can't leave the view scrolled
-                // into empty space until the next scroll input (parity with NeoForge)
+                // into empty space until the next scroll input.
                 int clampedOffset = Math.min(scrollOffset, newMaxScroll);
 
-                g.enableScissor(0, startY, WIDTH, visibleBottom);
+                g.enableScissor(0, startY, WIDTH, listEnd2);
                 int scrollY = startY - clampedOffset;
                 for (var info : players) {
                     String name = info.getProfile().getName();
@@ -149,7 +268,7 @@ public final class ChatSidebar {
                     if (ChatBubbleConfig.isSidebarHidden(name)) continue;
                     if (!filter.isEmpty() && !name.toLowerCase().contains(filter)) continue;
 
-                    if (scrollY + ITEM_H > startY && scrollY < visibleBottom) {
+                    if (scrollY + ITEM_H > startY && scrollY < listEnd2) {
                         boolean sel = name.equals(whisperPartner);
                         boolean hoverRow = mouseX >= 0 && mouseX <= WIDTH
                             && mouseY >= scrollY && mouseY <= scrollY + ITEM_H;
@@ -189,6 +308,18 @@ public final class ChatSidebar {
                 g.disableScissor();
             }
         }
+
+        // 「＋ 创建群组」: the standalone button pinned above the input bar (its own strip;
+        // the group block above it stops at the block's lower bound).
+        int btnY = SidebarModel.createButtonY(sidebarBottom);
+        boolean hoverBtn = mouseX >= 4 && mouseX <= WIDTH - 4
+            && mouseY >= btnY && mouseY <= btnY + SidebarModel.CREATE_BTN_H;
+        com.niuqu.chatbubble.texture.ColoredTextureRenderer.drawWithAlpha(g,
+            UiTextureManager.rl(hoverBtn ? UiElement.SIDEBAR_HOVER : UiElement.INPUT_BG),
+            4, btnY, WIDTH - 8, SidebarModel.CREATE_BTN_H, alpha);
+        String create = Component.translatable("e33chat.sidebar.create_group").getString();
+        g.drawString(font, Component.literal(create), UiLayout.centerX(0, WIDTH, font.width(create)),
+            btnY + 6, c.textPrimary(), false);
         return newMaxScroll;
     }
 

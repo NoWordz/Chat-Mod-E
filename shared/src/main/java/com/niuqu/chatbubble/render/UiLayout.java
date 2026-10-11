@@ -1,5 +1,13 @@
 package com.niuqu.chatbubble.render;
 
+/**
+ * Small layout helpers shared by the three targets.
+ *
+ * <p>The sidebar channel-column geometry (row rhythm, group-block window, pinned
+ * create button) lives in {@code shared/logic/SidebarModel}, which is the single
+ * source of truth the three screens call. This class keeps only the generic
+ * centring/clamping helpers.
+ */
 public final class UiLayout {
     private UiLayout() {}
 

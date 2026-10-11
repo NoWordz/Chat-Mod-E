@@ -1,5 +1,6 @@
 package com.niuqu.chatbubble.store;
 import com.niuqu.chatbubble.ChatBubbleClientSetup;
+import com.niuqu.chatbubble.chat.GroupChannelState;
 import com.niuqu.chatbubble.config.ChatBubbleConfig;
 
 import net.minecraft.util.Formatting;import net.minecraft.client.MinecraftClient;
@@ -206,18 +207,11 @@ public class ChatMessageStore {
     }
 
 
-    // 2s TTL: if addMessage never runs (another mod cancelled it), a stale
-    // note must not misattribute an unrelated later message
     public static SenderMeta consumePendingMeta() {
         return EchoTracker.consumePendingMeta();
     }
 
 
-    // quoted: the sent message was a quote reply — carried on the echo record so a
-    // later unrelated message can never inherit the [引用] tag (quote replies travel
-    // as plain chat, so the echo's quoted flag is their only rewrite signal)
-    
-    
     public static void markPendingWhisperEcho(String target) {
         EchoTracker.markPendingWhisperEcho(target);
     }
@@ -308,6 +302,7 @@ public class ChatMessageStore {
             if (!m.isOwn()) continue;
             if (!m.senderName().getString().equals(senderName.getString())) {
                 messages.set(i, m.withSenderName(senderName));
+                contentRevision++;
             }
             return;
         }
@@ -336,25 +331,45 @@ public class ChatMessageStore {
         String rawPlayerName,
         boolean whisper,
         String whisperPartner,
-        String group
+        String group,
+        /** Durable group identity (2.5.0, D2); null for non-group and pre-2.5 rows. */
+        UUID groupId,
+        /** Durable sequence inside {@link #groupId}; null when the row is unnumbered. */
+        Long groupSequence
     ) {
-        // Wither helpers: field-level updates without rebuilding 13-arg constructors.
+        // Wither helpers: field-level updates without rebuilding the full constructor.
         public ChatMessage withSenderName(Text newSenderName) {
             return new ChatMessage(senderUUID, newSenderName, content, time,
                 isOwn, isSystem, replyContent, replySender, messageHash, duplicateCount,
-                rawPlayerName, whisper, whisperPartner, group);
+                rawPlayerName, whisper, whisperPartner, group, groupId, groupSequence);
         }
 
         public ChatMessage withMerge(String newReplyContent, String newReplySender, long newTime, int newDupCount) {
             return new ChatMessage(senderUUID, senderName, content, newTime,
                 isOwn, isSystem, newReplyContent, newReplySender, messageHash, newDupCount,
-                rawPlayerName, whisper, whisperPartner, group);
+                rawPlayerName, whisper, whisperPartner, group, groupId, groupSequence);
         }
 
         public ChatMessage withReply(String newReplyContent, String newReplySender) {
             return new ChatMessage(senderUUID, senderName, content, time,
                 isOwn, isSystem, newReplyContent, newReplySender, messageHash, duplicateCount,
-                rawPlayerName, whisper, whisperPartner, group);
+                rawPlayerName, whisper, whisperPartner, group, groupId, groupSequence);
+        }
+
+        /** Convenience constructor for the pre-2.5 call sites: an unnumbered, world/DM row. */
+        public ChatMessage(UUID senderUUID, Text senderName, Text content, long time,
+                           boolean isOwn, boolean isSystem, String replyContent, String replySender,
+                           String messageHash, int duplicateCount, String rawPlayerName,
+                           boolean whisper, String whisperPartner, String group) {
+            this(senderUUID, senderName, content, time, isOwn, isSystem, replyContent, replySender,
+                messageHash, duplicateCount, rawPlayerName, whisper, whisperPartner, group, null, null);
+        }
+
+        /** Binds a pre-2.5 unnumbered row to its granted stable id; the sequence stays null. */
+        public ChatMessage withGroupId(UUID newGroupId) {
+            return new ChatMessage(senderUUID, senderName, content, time,
+                isOwn, isSystem, replyContent, replySender, messageHash, duplicateCount,
+                rawPlayerName, whisper, whisperPartner, group, newGroupId, groupSequence);
         }
     }
 
@@ -375,8 +390,10 @@ public class ChatMessageStore {
     // the sender's old messages keep showing after the block takes effect.
     public static void purgeBlocked(List<? extends String> blocked) {
         if (blocked == null || blocked.isEmpty()) return;
+        int before = messages.size();
         messages.removeIf(m -> !m.isOwn() && !m.isSystem()
             && BlockList.isPlayerBlocked(m.rawPlayerName(), m.senderName(), blocked));
+        if (messages.size() != before) contentRevision++;
     }
 
     // History restored from disk / server packets must not re-import blocked
@@ -392,12 +409,36 @@ public class ChatMessageStore {
         () -> net.minecraft.client.MinecraftClient.getInstance().player;
 
     public static void addMessage(Text content, UUID senderUUID, Text senderName, boolean isSystem, String rawPlayerName, boolean whisper, String whisperPartner, boolean localSend) {
-        addMessage(content, senderUUID, senderName, isSystem, rawPlayerName, whisper, whisperPartner, localSend, null);
+        addMessage(content, senderUUID, senderName, isSystem, rawPlayerName, whisper, whisperPartner, localSend,
+            null, null, null);
     }
 
     /** Group chat entry point (2.4.10): the packet handler passes the owning group. */
     public static void addGroupMessage(Text content, UUID senderUUID, Text senderName,
                                        String group, String quoteSender, String quoteContent) {
+        // A server that answered our protocol-1 HELLO owns group delivery on this
+        // connection, so a late v1 live row (sent before it saw our ACK, or sent
+        // after it refused the handshake because groups are off) is ignored rather
+        // than cached: accepting it would resurrect the name-grouped v1 behaviour
+        // the server declined. Accepted handshakes never reach here — the v1
+        // packet handler returns early once v2 is negotiated.
+        if (group != null && !group.isEmpty() && GroupChannelState.v2ServerKnown()) return;
+        addGroupMessage(content, senderUUID, senderName, group, quoteSender, quoteContent, null, null);
+    }
+
+    /**
+     * 2.5.0 v2 live row: carries the durable {@code (groupId, sequence)} identity
+     * that the store deduplicates and the JSONL preserves.
+     */
+    public static void addGroupMessageV2(Text content, UUID senderUUID, Text senderName, UUID groupId,
+                                         long sequence, String group, String quoteSender, String quoteContent) {
+        addGroupMessage(content, senderUUID, senderName, group, quoteSender, quoteContent, groupId, sequence);
+    }
+
+    private static void addGroupMessage(Text content, UUID senderUUID, Text senderName, String group,
+                                        String quoteSender, String quoteContent, UUID groupId, Long groupSequence) {
+        // A live row and its paged twin are the same message: never bubble twice.
+        if (groupId != null && groupSequence != null && hasGroupRow(groupId, groupSequence)) return;
         if (group != null && !group.isEmpty()) {
             EchoTracker.putPendingMeta(
                 String.valueOf(content.getString().hashCode()),
@@ -406,10 +447,87 @@ public class ChatMessageStore {
                 java.util.List.of());
         }
         addMessage(content, senderUUID, senderName, false, senderName != null ? senderName.getString() : null,
-            false, null, false, group);
+            false, null, false, group, groupId, groupSequence);
     }
 
-    public static void addMessage(Text content, UUID senderUUID, Text senderName, boolean isSystem, String rawPlayerName, boolean whisper, String whisperPartner, boolean localSend, String group) {
+    /** True when a row with this durable group identity is already stored. */
+    public static boolean hasGroupRow(UUID groupId, long sequence) {
+        if (groupId == null) return false;
+        for (ChatMessage msg : messages) {
+            if (groupId.equals(msg.groupId()) && msg.groupSequence() != null
+                && msg.groupSequence() == sequence) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Stores server-authorized durable rows in sequence order.
+     *
+     * <p>A row already present under the same {@code (groupId, sequence)} — because
+     * a live row beat its paged twin, or because a page was re-fetched — is skipped.
+     * Each accepted row lands before the newest stored row of its own group that is
+     * still newer, so an offline backfill keeps the group's reading order no matter
+     * when it arrives relative to live traffic.
+     */
+    public static void addGroupHistoryEntries(List<com.niuqu.chatbubble.group.GroupHistoryEntry> entries) {
+        if (entries == null || entries.isEmpty()) return;
+        boolean added = false;
+        for (com.niuqu.chatbubble.group.GroupHistoryEntry entry : entries) {
+            if (entry == null) continue;
+            String content = entry.content();
+            if (content == null || content.isBlank()) continue;
+            String sender = entry.senderName() != null ? entry.senderName() : "";
+            // A blocked sender's rows are dropped here exactly as every other
+            // history import in this file does: the block list must produce the
+            // same visible and stored history whatever path a row arrived by.
+            if (BlockList.isPlayerBlocked(sender, Text.literal(sender),
+                ChatBubbleClientSetup.config().blockedPlayers())) continue;
+            if (hasGroupRow(entry.groupId(), entry.sequence())) continue;
+            var directoryEntry = com.niuqu.chatbubble.chat.GroupChannelState.directoryEntry(entry.groupId());
+            if (directoryEntry == null) continue;
+            ChatMessage row = new ChatMessage(
+                entry.senderUUID(),
+                Text.literal(entry.senderName()),
+                Text.literal(content),
+                entry.time(),
+                false,
+                false,
+                entry.replyContent(),
+                entry.replySender(),
+                String.valueOf(content.hashCode()),
+                1,
+                entry.senderName(),
+                false,
+                null,
+                directoryEntry.identity().displayName(),
+                entry.groupId(),
+                entry.sequence()
+            );
+            messages.add(groupInsertIndex(row), row);
+            added = true;
+            if (!entry.senderUUID().equals(new UUID(0, 0)))
+                rememberPlayer(entry.senderUUID(), entry.senderName(), entry.senderName());
+        }
+        if (!added) return;
+        trimToMax();
+        historyDirty = true;
+        contentRevision++;
+    }
+
+    private static int groupInsertIndex(ChatMessage row) {
+        for (int i = 0; i < messages.size(); i++) {
+            ChatMessage other = messages.get(i);
+            if (!row.groupId().equals(other.groupId()) || other.groupSequence() == null) continue;
+            // Land before the newest row that is still newer, so a backfill that
+            // arrives after live traffic keeps the group's reading order.
+            if (other.groupSequence() > row.groupSequence()) return i;
+        }
+        return messages.size();
+    }
+
+    private static void addMessage(Text content, UUID senderUUID, Text senderName, boolean isSystem, String rawPlayerName, boolean whisper, String whisperPartner, boolean localSend, String group, UUID groupId, Long groupSequence) {
         String messageHash = String.valueOf(content.getString().hashCode());
 
         // A message that is only whitespace/control chars — e.g. a server chat-clear
@@ -439,6 +557,8 @@ public class ChatMessageStore {
         if (ChatBubbleClientSetup.config().antiSpam() && !messages.isEmpty()) {
             ChatMessage last = messages.get(messages.size() - 1);
             if (!last.isSystem() && isSameSender(last, senderName, rawPlayerName)
+                && java.util.Objects.equals(last.groupId(), groupId)
+                && java.util.Objects.equals(last.groupSequence(), groupSequence)
                 && last.content().getString().equals(content.getString())) {
                 // The merged bubble's quote block must reflect THIS send, not
                 // inherit the previous one's — an unquoted identical follow-up
@@ -461,6 +581,7 @@ public class ChatMessageStore {
                 messages.set(messages.size() - 1, last.withMerge(
                     mergeReplyContent, mergeReplySender, System.currentTimeMillis(),
                     last.duplicateCount() + 1));
+                contentRevision++;
                 return;
             }
         }
@@ -482,7 +603,7 @@ public class ChatMessageStore {
             replySender = pending.quoteSender();
         }
 
-        messages.add(new ChatMessage(
+        ChatMessage row = new ChatMessage(
             senderUUID,
             senderName != null ? senderName : Text.literal(""),
             content,
@@ -496,15 +617,22 @@ public class ChatMessageStore {
             rawPlayerName,
             whisper,
             whisperPartner,
-            group
-        ));
+            group,
+            groupId,
+            groupSequence
+        );
+        if (groupId != null && groupSequence != null) {
+            messages.add(groupInsertIndex(row), row);
+        } else {
+            messages.add(row);
+        }
 
         if (!isSystem && senderUUID != null && !senderUUID.equals(new UUID(0, 0)))
             rememberPlayer(senderUUID, rawPlayerName, senderName.getString());
 
-        while (messages.size() > MAX)
-            messages.remove(0);
+        trimToMax();
         historyDirty = true;
+        contentRevision++;
 
         boolean isMentionOrQuote = !isSystem
             && com.niuqu.chatbubble.chat.MentionDetector.isMentioned(
@@ -597,7 +725,10 @@ public class ChatMessageStore {
     public static List<ChatMessage> getPublicMessages() {
         List<ChatMessage> result = new ArrayList<>();
         for (ChatMessage msg : messages) {
-            if (!msg.whisper()) {
+            // A row the current directory no longer authorizes (left group, an
+            // older membership window, a same-name different id) stays out of the
+            // public view; without a v2 handshake isVisible allows everything.
+            if (!msg.whisper() && GroupChannelState.isVisible(msg)) {
                 result.add(msg);
             }
         }
@@ -614,14 +745,26 @@ public class ChatMessageStore {
         return null;
     }
 
-    public static ChatMessage getLatestPublicMessage() {
+    /**
+     * Newest message belonging to one channel tab (world-row preview, per-group preview).
+     * Routing goes through {@link GroupChannelState#matchesTab} — the same predicate the
+     * message list uses — so a preview can never show another channel's row (the field
+     * symptom that started this: a group line surfacing in the 世界频道 row).
+     */
+    public static ChatMessage getLatestForTab(String tab) {
         for (int i = messages.size() - 1; i >= 0; i--) {
             ChatMessage msg = messages.get(i);
-            if (!msg.whisper()) {
+            if (!msg.whisper() && GroupChannelState.isVisible(msg)
+                && GroupChannelState.matchesTab(msg, tab)) {
                 return msg;
             }
         }
         return null;
+    }
+
+    /** Newest authorized world-channel message (the sidebar's 世界频道 preview). */
+    public static ChatMessage getLatestPublicMessage() {
+        return getLatestForTab(GroupChannelState.TAB_WORLD);
     }
 
     private static final Set<String> unreadWhisperPartners = new java.util.HashSet<>();
@@ -672,6 +815,37 @@ public class ChatMessageStore {
     public static ChatMessage getMessageAt(int index) {
         if (index < 0 || index >= messages.size()) return null;
         return messages.get(index);
+    }
+
+    /**
+     * Re-resolve a row the context/reply menus captured earlier.
+     *
+     * <p>The list moves under those menus — a v2 history page inserts rows at
+     * their sequence position, in the middle of the list — and rows are rebuilt
+     * in place (quote metadata, echo name patch, anti-spam merge), so an index
+     * captured at click time can name a different message by the time the menu
+     * action runs. The captured record itself is the stable target: it is looked
+     * up by identity first, then by its durable {@code (groupId, sequence)} when
+     * it was rebuilt in place. A row that is gone, or that the current directory
+     * no longer authorizes, resolves to {@code null} — the action must then do
+     * nothing instead of acting on whatever row now sits at the old index.
+     */
+    public static ChatMessage resolveVisibleMessage(ChatMessage selected) {
+        if (selected == null) return null;
+        for (ChatMessage candidate : messages) {
+            if (candidate == selected) {
+                return GroupChannelState.isVisible(candidate) ? candidate : null;
+            }
+        }
+        if (selected.groupId() != null && selected.groupSequence() != null) {
+            for (ChatMessage candidate : messages) {
+                if (selected.groupId().equals(candidate.groupId())
+                    && selected.groupSequence().equals(candidate.groupSequence())) {
+                    return GroupChannelState.isVisible(candidate) ? candidate : null;
+                }
+            }
+        }
+        return null;
     }
 
     public static void setPendingReply(String content, String sender) {
@@ -859,6 +1033,9 @@ public class ChatMessageStore {
         if (ChatBubbleClientSetup.config().chatHistoryEnabled() && isWorldSpecific(currentWorldKey))
             saveMessages(currentWorldKey);
         currentWorldKey = name;
+        // A new session: any history read still in flight belongs to the old world.
+        sessionEpoch++;
+        contentRevision++;
         cleanupOldHistory();
         if (isRefinement || hasPendingMessages) {
             hasUnreadMentionFlag = false;
@@ -875,6 +1052,10 @@ public class ChatMessageStore {
                 messages.clear();
                 loadMessages(currentWorldKey, skipKeys);
                 messages.addAll(early);
+                // Rows re-inserted after the world key is known can still be
+                // pre-2.5 ones: re-attempt the one-time bind if the directory has
+                // changed since the last scan (no-op otherwise).
+                bindLegacyGroupRowsIfStale();
             }
             return;
         }
@@ -956,14 +1137,6 @@ public class ChatMessageStore {
 
     private static Style applySectionCode(Style style, char code) {
         return HistoryStore.applySectionCode(style, code);
-    }
-
-
-    // Legacy file stores LocalTime (HH:mm:ss) with no date; anchor the file's
-    // last-saved day on the file mtime and walk backwards: an earlier message
-    // whose clock time is LATER than its successor crossed midnight
-    private static List<ChatMessage> loadLegacyFile(File f) {
-        return HistoryStore.loadLegacyFile(f);
     }
 
 
@@ -1056,6 +1229,8 @@ public class ChatMessageStore {
         unreadWhisperPartners.clear();
         historyDirty = false;
         historyGeneration++;
+        sessionEpoch++;
+        contentRevision++;
 
         if (currentWorldKey == null) return;
         File f = getHistoryFile(currentWorldKey);
@@ -1088,6 +1263,90 @@ public class ChatMessageStore {
     // clear becomes stale and must not write the file back (see saveMessages).
     // Volatile because the save executor reads it off-thread.
     private static volatile long historyGeneration;
+
+    /**
+     * Bumped on every change to the visible message list (add/merge/purge/clear/
+     * load/bind). The chat screen keys its wrap/height cache on this instead of
+     * re-measuring every row every frame (audit P1).
+     */
+    private static volatile long contentRevision;
+
+    /**
+     * Bumped when the world/session changes. A background history read carries the
+     * epoch it was started under and its result is dropped if the epoch moved, so
+     * a late read of the old world can never write into the new session (P4).
+     */
+    private static volatile long sessionEpoch;
+
+    public static long contentRevision() { return contentRevision; }
+
+    public static long sessionEpoch() { return sessionEpoch; }
+
+    /** Drop the oldest rows past the cap in one operation, not a per-row remove(0). */
+    private static void trimToMax() {
+        int extra = messages.size() - MAX;
+        if (extra > 0) messages.subList(0, extra).clear();
+    }
+
+    /**
+     * Binds pre-2.5 unnumbered group rows to their stable id when the directory
+     * grants exactly one group under that display name (see
+     * {@link GroupChannelState#legacyGrantFor}). The sequence stays null forever,
+     * and a row already bound is never reconsidered, so a later same-name group
+     * with a new id can never adopt it. Only {@link #bindLegacyGroupRowsIfStale()}
+     * calls this.
+     *
+     * @return how many rows were bound (0 when nothing changed)
+     */
+    private static int bindLegacyGroupRows() {
+        if (!GroupChannelState.v2ServerKnown() || messages.isEmpty()) return 0;
+        int bound = 0;
+        for (int i = 0; i < messages.size(); i++) {
+            ChatMessage m = messages.get(i);
+            if (m.group() == null || m.group().isEmpty() || m.groupId() != null) continue;
+            UUID grant = GroupChannelState.legacyGrantFor(m.group());
+            if (grant == null) continue;
+            messages.set(i, m.withGroupId(grant));
+            bound++;
+        }
+        if (bound > 0) {
+            contentRevision++;
+            historyDirty = true;
+        }
+        return bound;
+    }
+
+    /**
+     * Directory version the legacy bind last ran under, paired with the content
+     * revision it saw. Both move only on batch operations (a directory apply or a
+     * history insert), so the guard keeps the whole-list bind scan out of the
+     * per-message path.
+     */
+    private static volatile long boundDirectoryVersion = Long.MIN_VALUE;
+    private static volatile long boundContentRevision = Long.MIN_VALUE;
+
+    /**
+     * Bind pre-2.5 rows once per directory change, re-attempted after a batch of
+     * rows lands. A directory packet can arrive before an async history read has
+     * inserted its rows, so the read calls this afterwards: by then the directory
+     * version alone already looks bound, hence the content revision is part of the
+     * key. A row that already carries a stable id is still skipped inside
+     * {@link #bindLegacyGroupRows()}, so a rebind can never move a row twice.
+     *
+     * <p>Called by the directory packet handler; the in-store history insert paths
+     * call it as well, so rows landing after the directory still get bound.
+     */
+    public static void bindLegacyGroupRowsIfStale() {
+        long version = GroupChannelState.directoryVersion();
+        long revision = contentRevision;
+        if (version == boundDirectoryVersion && revision == boundContentRevision) return;
+        int bound = bindLegacyGroupRows();
+        boundDirectoryVersion = version;
+        boundContentRevision = contentRevision;
+        if (bound > 0) debugLog(() -> "[e33chat] Legacy group rows bound | count=" + bound);
+    }
+
+
 
     // Retention cleanup: files older than the configured days are dropped on
     // world join (0 = keep forever, the default)
@@ -1127,6 +1386,14 @@ public class ChatMessageStore {
      * known, and those rows must not be restored a second time under them); pass an
      * empty map when nothing is kept.
      */
+    // Legacy file stores LocalTime (HH:mm:ss) with no date; anchor the file's
+    // last-saved day on the file mtime and walk backwards: an earlier message
+    // whose clock time is LATER than its successor crossed midnight
+    private static List<ChatMessage> loadLegacyFile(File f) {
+        return HistoryStore.loadLegacyFile(f);
+    }
+
+
     private static void loadMessages(String worldKey, Map<String, Integer> skipCounts) {
         // Own the map: a caller may hand over an immutable one, and takeFresh
         // consumes it as it goes.
@@ -1185,7 +1452,6 @@ public class ChatMessageStore {
         }
         while (messages.size() > MAX) messages.remove(0);
     }
-
 
     // Wall clock at class init: splits rows restored from disk (older than this
     // launch) from rows produced during this launch (join notice, MOTD, live chat).
@@ -1304,7 +1570,9 @@ public class ChatMessageStore {
                 sender,
                 false,
                 null,
-                e.group()
+                e.group(),
+                null,
+                null
             ));
             if (!e.isSystem() && e.senderUUID() != null && !e.senderUUID().equals(new UUID(0, 0)))
                 rememberPlayer(e.senderUUID(), sender, sender);
@@ -1317,7 +1585,8 @@ public class ChatMessageStore {
         int at = 0;
         while (at < messages.size() && messages.get(at).time() < SESSION_START_MS) at++;
         messages.addAll(at, fresh);
-        while (messages.size() > MAX) messages.remove(0);
+        trimToMax();
+        contentRevision++;
     }
 
     public static void applyChatMeta(UUID senderUUID, String senderName, String messageHash,
@@ -1337,6 +1606,7 @@ public class ChatMessageStore {
                 if (System.currentTimeMillis() - msg.time() > 5_000) continue;
                 if (!quoteContent.isEmpty()) {
                     messages.set(i, msg.withReply(quoteContent, quoteSender));
+                    contentRevision++;
                     String playerName = localPlayerSupplier.get() != null
                         ? localPlayerSupplier.get().getName().getString() : "";
                     if (!msg.isOwn() && !playerName.isEmpty()

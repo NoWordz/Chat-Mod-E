@@ -133,18 +133,47 @@ public class ChatBubbleClientSetup implements ClientModInitializer {
             com.niuqu.chatbubble.chat.GroupChannelState.reset();
             com.niuqu.chatbubble.store.ChatMessageStore.clearSeenPlayers();
             com.niuqu.chatbubble.network.ClientHelloPayload.send();
+            // 2.5.0 v2 handshake: real login hook, and only when the server declared
+            // the channel — an old server never does, so the v1 flow stays intact.
+            if (ClientPlayNetworking.canSend(com.niuqu.chatbubble.network.GroupProtocolHelloPayload.ID)) {
+                com.niuqu.chatbubble.network.GroupProtocolHelloPayload.send();
+            }
         });
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             com.niuqu.chatbubble.chat.GroupChannelState.reset();
+            // Capture state (pending notes, echo counters, quote timestamps) is
+            // connection-scoped: a new server must not inherit the old one's.
             // Animated GIFs hold one GPU texture per frame; a new server must
-            // not inherit the old one's texture set.
+            // not inherit the old one's texture set. Static images and in-flight
+            // media transfers go the same way.
             com.niuqu.chatbubble.image.AnimatedImageLoader.resetAll();
+            // A partially received directory transfer must not survive the session.
+            com.niuqu.chatbubble.network.GroupDirectoryChunkPayload.resetTransfers();
         });
         ClientPlayNetworking.registerGlobalReceiver(com.niuqu.chatbubble.network.GroupChatPayload.ID, (payload, context) -> {
             context.client().execute(() -> com.niuqu.chatbubble.network.GroupChatPayload.handleClient(payload));
         });
         ClientPlayNetworking.registerGlobalReceiver(com.niuqu.chatbubble.network.GroupListPayload.ID, (payload, context) -> {
             context.client().execute(() -> com.niuqu.chatbubble.network.GroupListPayload.handleClient(payload));
+        });
+        // 2.5.0 v2 consumers: ACK unlocks, directory drives the paging chain, live
+        // rows are deduplicated against the pages by (groupId, sequence).
+        ClientPlayNetworking.registerGlobalReceiver(com.niuqu.chatbubble.network.GroupProtocolAckPayload.ID, (payload, context) -> {
+            context.client().execute(() -> com.niuqu.chatbubble.network.GroupProtocolAckPayload.handleClient(payload));
+        });
+        ClientPlayNetworking.registerGlobalReceiver(com.niuqu.chatbubble.network.GroupDirectoryPayload.ID, (payload, context) -> {
+            context.client().execute(() -> com.niuqu.chatbubble.network.GroupDirectoryPayload.handleClient(payload));
+        });
+        // A directory larger than one custom payload arrives as chunks; the client
+        // reassembles them and applies the same single snapshot on the last chunk.
+        ClientPlayNetworking.registerGlobalReceiver(com.niuqu.chatbubble.network.GroupDirectoryChunkPayload.ID, (payload, context) -> {
+            context.client().execute(() -> com.niuqu.chatbubble.network.GroupDirectoryChunkPayload.handleClient(payload));
+        });
+        ClientPlayNetworking.registerGlobalReceiver(com.niuqu.chatbubble.network.GroupChatV2Payload.ID, (payload, context) -> {
+            context.client().execute(() -> com.niuqu.chatbubble.network.GroupChatV2Payload.handleClient(payload));
+        });
+        ClientPlayNetworking.registerGlobalReceiver(com.niuqu.chatbubble.network.GroupHistoryPagePayload.ID, (payload, context) -> {
+            context.client().execute(() -> com.niuqu.chatbubble.network.GroupHistoryPagePayload.handleClient(payload));
         });
         ClientPlayNetworking.registerGlobalReceiver(MediaCapPayload.ID, (payload, context) -> {
             context.client().execute(() -> MediaCapPayload.handle(payload));

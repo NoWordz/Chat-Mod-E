@@ -1,5 +1,6 @@
 package com.niuqu.chatbubble.packets;
 
+import com.niuqu.chatbubble.chat.GroupChannelState;
 import com.niuqu.chatbubble.network.NetworkHandler;
 import com.niuqu.chatbubble.server.GroupManager;
 import net.minecraft.network.FriendlyByteBuf;
@@ -18,9 +19,6 @@ import java.util.function.Supplier;
  * accepted protocol, the recipient-scoped directory.
  */
 public class GroupProtocolHelloPacket {
-
-    /** v2 group protocol this build speaks; the server ACKs only a matching offer. */
-    public static final int GROUP_PROTOCOL = 1;
 
     private final int protocol;
 
@@ -47,7 +45,7 @@ public class GroupProtocolHelloPacket {
         if (mc.player == null || mc.player.connection == null) return;
         var connection = mc.player.connection.getConnection();
         if (connection == null || !NetworkHandler.GROUPS_CHANNEL.isRemotePresent(connection)) return;
-        NetworkHandler.GROUPS_CHANNEL.sendToServer(new GroupProtocolHelloPacket(GROUP_PROTOCOL));
+        NetworkHandler.GROUPS_CHANNEL.sendToServer(new GroupProtocolHelloPacket(GroupChannelState.GROUP_PROTOCOL));
     }
 
     public void handle(Supplier<NetworkEvent.Context> ctx) {

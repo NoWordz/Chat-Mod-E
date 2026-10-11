@@ -1,6 +1,8 @@
 package com.niuqu.chatbubble.store;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.ToNumberPolicy;
 import com.google.gson.reflect.TypeToken;
 import com.niuqu.chatbubble.config.ChatBubbleConfig;
 import java.io.File;
@@ -33,7 +35,8 @@ import net.minecraft.network.chat.Style;
 public final class HistoryStore {
     private HistoryStore() {}
 
-    private static final Gson GSON = new Gson();
+    private static final Gson GSON = new GsonBuilder()
+        .setObjectToNumberStrategy(ToNumberPolicy.LAZILY_PARSED_NUMBER).create();
 
     /** Test seam: headless unit tests stub this to a temp dir so path helpers
      *  never touch Minecraft.getInstance() (which is null in the test JVM). */
@@ -129,6 +132,11 @@ public final class HistoryStore {
         if (msg.whisper()) obj.put("whisper", true);
         if (msg.whisperPartner() != null) obj.put("whisperPartner", msg.whisperPartner());
         if (msg.group() != null) obj.put("group", msg.group());
+        // v2 identity. Written only when known, so a pre-2.5 file keeps its exact
+        // shape; the sequence stays a bare JSON integer, which Gson reads back as
+        // a string-backed number (no double round-trip, full long precision).
+        if (msg.groupId() != null) obj.put("groupId", msg.groupId().toString());
+        if (msg.groupSequence() != null) obj.put("groupSequence", msg.groupSequence());
         return GSON.toJson(obj);
     }
 
@@ -161,7 +169,7 @@ public final class HistoryStore {
             flags.contains("M"),
             flags.contains("S"),
             replyContent, replySender, "", 1, null,
-            whisper, partner, null
+            whisper, partner, null, null, null
         );
     }
 
@@ -195,8 +203,31 @@ public final class HistoryStore {
             (String) obj.get("rawPlayerName"),
             Boolean.TRUE.equals(obj.get("whisper")),
             (String) obj.get("whisperPartner"),
-            (String) obj.get("group")
+            (String) obj.get("group"),
+            groupIdFrom(obj),
+            groupSequenceFrom(obj)
         );
+    }
+
+    /** Stable group id as written by toLine; a malformed value degrades the row to
+     *  an unnumbered legacy row instead of dropping it. */
+    private static UUID groupIdFrom(Map<String, Object> obj) {
+        Object raw = obj.get("groupId");
+        if (raw == null) return null;
+        try {
+            return UUID.fromString(String.valueOf(raw));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /** Server sequence as written by toLine. Missing/invalid/non-positive values
+     *  mean "unnumbered": the sequence is never inferred from anything else. */
+    private static Long groupSequenceFrom(Map<String, Object> obj) {
+        Object raw = obj.get("groupSequence");
+        if (!(raw instanceof Number number)) return null;
+        long value = number.longValue();
+        return value >= 1 ? value : null;
     }
 
     static Component componentFrom(Map<String, Object> obj, String jsonKey, String textKey) {
@@ -287,12 +318,29 @@ public final class HistoryStore {
     // last-saved day on the file mtime and walk backwards: an earlier message
     // whose clock time is LATER than its successor crossed midnight
     public static List<ChatMessageStore.ChatMessage> loadLegacyFile(File f) {
+        String json;
+        try {
+            json = new String(java.nio.file.Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            com.mojang.logging.LogUtils.getLogger().warn("[e33chat] Failed to read/write chat history", e);
+            return new ArrayList<>();
+        }
+        return loadLegacyJson(json, f.lastModified());
+    }
+
+    /**
+     * Parse a legacy JSON-array history file. The caller passes the raw text and
+     * the file mtime (the date anchor); styled components are decoded here, so this
+     * must run on the client thread. Kept separate from the file read so the read
+     * can happen off-thread (audit P4).
+     */
+    public static List<ChatMessageStore.ChatMessage> loadLegacyJson(String json, long fileMtime) {
         List<ChatMessageStore.ChatMessage> out = new ArrayList<>();
-        try (Reader r = new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8)) {
-            List<Map<String, Object>> list = GSON.fromJson(r, new TypeToken<List<Map<String, Object>>>(){}.getType());
+        try {
+            List<Map<String, Object>> list = GSON.fromJson(json, new TypeToken<List<Map<String, Object>>>(){}.getType());
             if (list == null) return out;
             java.time.ZoneId zone = java.time.ZoneId.systemDefault();
-            java.time.LocalDate day = java.time.Instant.ofEpochMilli(f.lastModified())
+            java.time.LocalDate day = java.time.Instant.ofEpochMilli(fileMtime)
                 .atZone(zone).toLocalDate();
             LocalTime latest = null;
             for (int i = list.size() - 1; i >= 0; i--) {
@@ -321,7 +369,7 @@ public final class HistoryStore {
                     String whisperPartner = (String) obj.get("whisperPartner");
                     out.add(0, new ChatMessageStore.ChatMessage(uuid, senderName, content, millis,
                         isOwn, isSystem, replyContent, replySender, "", 1, rawPlayerName,
-                        whisper, whisperPartner, null));
+                        whisper, whisperPartner, null, null, null));
                 } catch (Exception e) { com.mojang.logging.LogUtils.getLogger().warn("[e33chat] Failed to read/write chat history", e); }
             }
         } catch (Exception e) { com.mojang.logging.LogUtils.getLogger().warn("[e33chat] Failed to read/write chat history", e); }
