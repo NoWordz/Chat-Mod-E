@@ -189,12 +189,25 @@ public class NetworkHandler {
             .add();
 
         // 2.5.0 lifecycle actions plus the chunked directory for a snapshot too
-        // large for one packet. Group media (M9) will claim the two free ids 7/8
-        // once its UUID MediaBinding authorization exists; the id gap is explicit.
+        // large for one packet. Group media (M9) claims the two free ids 7/8: the
+        // per-upload group scope and the group-scoped upload path, so a group
+        // image is stored as g_ bytes bound to its group UUID.
         GROUPS_CHANNEL.messageBuilder(com.niuqu.chatbubble.packets.GroupActionV2Packet.class, 6)
             .encoder(com.niuqu.chatbubble.packets.GroupActionV2Packet::encode)
             .decoder(com.niuqu.chatbubble.packets.GroupActionV2Packet::decode)
             .consumerMainThread(com.niuqu.chatbubble.packets.GroupActionV2Packet::handle)
+            .add();
+
+        GROUPS_CHANNEL.messageBuilder(com.niuqu.chatbubble.packets.GroupMediaContextPacket.class, 7)
+            .encoder(com.niuqu.chatbubble.packets.GroupMediaContextPacket::encode)
+            .decoder(com.niuqu.chatbubble.packets.GroupMediaContextPacket::decode)
+            .consumerMainThread(com.niuqu.chatbubble.packets.GroupMediaContextPacket::handle)
+            .add();
+
+        GROUPS_CHANNEL.messageBuilder(com.niuqu.chatbubble.packets.GroupMediaUploadPacket.class, 8)
+            .encoder(com.niuqu.chatbubble.packets.GroupMediaUploadPacket::encode)
+            .decoder(com.niuqu.chatbubble.packets.GroupMediaUploadPacket::decode)
+            .consumerMainThread(com.niuqu.chatbubble.packets.GroupMediaUploadPacket::handle)
             .add();
 
         GROUPS_CHANNEL.messageBuilder(com.niuqu.chatbubble.packets.GroupDirectoryChunkPacket.class, 9)

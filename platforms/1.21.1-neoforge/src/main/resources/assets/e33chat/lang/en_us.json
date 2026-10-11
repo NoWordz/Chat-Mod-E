@@ -299,6 +299,7 @@
   "e33chat.group.already_in": "You are already in group [%s]",
   "e33chat.group.cooldown": "You are sending messages too fast",
   "e33chat.group.save_failed": "Failed to save group data; check the server disk",
+  "e33chat.group.media_denied": "That image belongs to another group",
   "e33chat.group.empty": "Message must not be empty",
   "e33chat.group.list_header": "Groups (%s total):",
   "e33chat.group.list_empty": "No groups yet — create the first with /e33chat group create <name>",

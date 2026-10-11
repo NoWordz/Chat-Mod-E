@@ -105,6 +105,15 @@ public class NetworkHandler {
         registrar.playToServer(com.niuqu.chatbubble.packets.GroupActionV2Payload.TYPE,
             com.niuqu.chatbubble.packets.GroupActionV2Payload.STREAM_CODEC,
             com.niuqu.chatbubble.packets.GroupActionV2Payload::handleServer);
+        // 2.5.0 M9 group media: the per-upload group scope plus the group-scoped
+        // upload path. The public main-channel media upload is untouched; group
+        // images travel here so their g_ bytes are scoped to their group UUID.
+        registrar.playToServer(com.niuqu.chatbubble.packets.GroupMediaContextPayload.TYPE,
+            com.niuqu.chatbubble.packets.GroupMediaContextPayload.STREAM_CODEC,
+            com.niuqu.chatbubble.packets.GroupMediaContextPayload::handleServer);
+        registrar.playToServer(com.niuqu.chatbubble.packets.GroupMediaUploadPayload.TYPE,
+            com.niuqu.chatbubble.packets.GroupMediaUploadPayload.STREAM_CODEC,
+            com.niuqu.chatbubble.packets.GroupMediaUploadPayload::handleServer);
         // Large recipient-scoped directories travel as chunks on the same protocol;
         // small ones keep using the single GroupDirectoryPayload above.
         registrar.playToClient(com.niuqu.chatbubble.packets.GroupDirectoryChunkPayload.TYPE,

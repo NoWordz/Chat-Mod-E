@@ -396,10 +396,12 @@ public final class GroupManager {
         if (text.isEmpty()) { fail(sender, "e33chat.group.empty"); return; }
         if (text.length() > MAX_CONTENT) text = text.substring(0, MAX_CONTENT);
 
-        // TODO(M9): group-media authorization is not implemented yet (M9 owns it, and
-        // it will use the UUID MediaBinding design from §13 D6). Until then a group
-        // message is accepted without a media check: group-chat text still works, only
-        // hosted group media has no authorization yet.
+        // Media authorization first (M9): a hosted media reference that belongs to
+        // another group is refused before anything is stored or fanned out.
+        if (!MediaService.validateGroupMessage(sender.getUUID(), groupId, text, groupMediaStore())) {
+            fail(sender, "e33chat.group.media_denied");
+            return;
+        }
         lastSay.put(sender.getUUID(), now);
 
         String senderName = sender.getName().getString();
@@ -409,8 +411,16 @@ public final class GroupManager {
             quote != null ? quote.quotedSenderName() : null,
             groupHistoryStore);
         if (entry == null) { fail(sender, "e33chat.group.send_failed"); return; }
-        // TODO(M9): bind this row's referenced upload to the group once the
-        // UUID MediaBinding authorization exists; a failure must never widen access.
+        // Bind the referenced upload to this row's sequence AFTER the row is
+        // durable (M9). A failure must never widen access: the file stays PENDING
+        // (readable only by its uploader or a current member), and the message
+        // itself is already committed.
+        try {
+            MediaService.onGroupMessageCommitted(entry, groupMediaStore());
+        } catch (IOException bindFailed) {
+            com.mojang.logging.LogUtils.getLogger().warn(
+                "[e33chat] Failed to bind group media for group {}", groupId, bindFailed);
+        }
 
         for (ServerPlayer p : server.getPlayerList().getPlayers()) {
             if (!groupV2Clients.contains(p.getUUID())) continue;
@@ -603,8 +613,25 @@ public final class GroupManager {
                     "[e33chat] Failed to delete group history for {}", groupId, ex);
             }
         }
-        // TODO(M9): drop this disbanded group's UUID MediaBinding entries here once
-        // group-media authorization exists; before that there is nothing to drop.
+        // Drop this disbanded group's hosted media. Deleting the bytes is the
+        // safety property: a failure must never widen access, and the disband
+        // itself is already durable, so every group-media check now denies.
+        try {
+            MediaService.onGroupDeleted(groupId, groupMediaStore());
+        } catch (RuntimeException mediaFailure) {
+            com.mojang.logging.LogUtils.getLogger().warn(
+                "[e33chat] Failed to drop media bindings of disbanded group {}", groupId, mediaFailure);
+        }
+    }
+
+    /** The live media store, or null before the server has one (headless tests).
+     *  All group-media seams go through here so a missing store fails closed. */
+    private static DiskMediaStore groupMediaStore() {
+        try {
+            return ChatServerListener.mediaStore();
+        } catch (RuntimeException noServer) {
+            return null;
+        }
     }
 
     // ==== Persistence ====
