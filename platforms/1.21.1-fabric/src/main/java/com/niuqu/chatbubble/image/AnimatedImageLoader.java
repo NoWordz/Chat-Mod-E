@@ -305,20 +305,23 @@ public final class AnimatedImageLoader {
                     return;
                 }
             } else {
-                // Raw non-ASCII (Chinese filenames) must go through the ASCII
-                // URI form or HttpClient can fail before any network I/O.
-                URI requestUri = URI.create(URI.create(entry.url).toASCIIString());
-                HttpResponse<byte[]> response = ImageLoader.client().send(
-                    HttpRequest.newBuilder(requestUri)
-                        .timeout(Duration.ofSeconds(30)).build(),
-                    HttpResponse.BodyHandlers.ofByteArray());
-                bytes = response.statusCode() >= 200 && response.statusCode() < 300
-                    ? response.body() : null;
+                bytes = ImageUploader.ownUploadBytes(entry.url);
                 if (bytes == null) {
-                    entry.markFailed();
-                    LOGGER.info("[e33chat] animated image fetch failed: {} (HTTP {})",
-                        entry.url, response.statusCode());
-                    return;
+                    // Raw non-ASCII (Chinese filenames) must go through the ASCII
+                    // URI form or HttpClient can fail before any network I/O.
+                    URI requestUri = URI.create(URI.create(entry.url).toASCIIString());
+                    HttpResponse<byte[]> response = ImageLoader.client().send(
+                        HttpRequest.newBuilder(requestUri)
+                            .timeout(Duration.ofSeconds(30)).build(),
+                        HttpResponse.BodyHandlers.ofByteArray());
+                    bytes = response.statusCode() >= 200 && response.statusCode() < 300
+                        ? response.body() : null;
+                    if (bytes == null) {
+                        entry.markFailed();
+                        LOGGER.info("[e33chat] animated image fetch failed: {} (HTTP {})",
+                            entry.url, response.statusCode());
+                        return;
+                    }
                 }
             }
             if (bytes.length == 0 || bytes.length > MAX_BYTES) {

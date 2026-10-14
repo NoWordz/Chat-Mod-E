@@ -262,9 +262,11 @@ public final class ImageLoader {
     private static void fetchAndDecode(String url, ImageEntry entry) {
         long t0 = System.currentTimeMillis();
         try {
-            byte[] body;
+            byte[] body = ImageUploader.ownUploadBytes(url);
             long t1;
-            if (url.startsWith("e33chat://")) {
+            if (body != null) {
+                t1 = System.currentTimeMillis();
+            } else if (url.startsWith("e33chat://")) {
                 body = MediaClient.fetch(url.substring("e33chat://media/".length()));
                 t1 = System.currentTimeMillis();
                 if (body == null) {

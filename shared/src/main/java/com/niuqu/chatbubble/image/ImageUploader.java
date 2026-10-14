@@ -7,6 +7,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 
@@ -39,8 +41,38 @@ public final class ImageUploader {
 
     private static final int MAX_UPLOAD_BYTES = 16 * 1024 * 1024;
     private static final long UPLOAD_TIMEOUT_SECONDS = 30;
+    private static final int OWN_UPLOAD_CACHE_ENTRIES = 24;
+    private static final long OWN_UPLOAD_CACHE_BYTES = 64L * 1024 * 1024;
+    private static final Map<String, byte[]> OWN_UPLOADS =
+        new LinkedHashMap<>(OWN_UPLOAD_CACHE_ENTRIES, 0.75f, true);
+    private static long ownUploadCacheBytes;
 
     private ImageUploader() {}
+
+    /** Bounded cache for source bytes uploaded by this client to third-party hosts. */
+    private static synchronized void rememberOwnUpload(String url, byte[] bytes) {
+        if (!isHttpUrl(url) || bytes == null || bytes.length == 0
+                || bytes.length > MAX_UPLOAD_BYTES || bytes.length > OWN_UPLOAD_CACHE_BYTES) return;
+
+        byte[] copy = bytes.clone();
+        byte[] previous = OWN_UPLOADS.put(url, copy);
+        if (previous != null) ownUploadCacheBytes -= previous.length;
+        ownUploadCacheBytes += copy.length;
+
+        var oldest = OWN_UPLOADS.entrySet().iterator();
+        while (OWN_UPLOADS.size() > OWN_UPLOAD_CACHE_ENTRIES
+                || ownUploadCacheBytes > OWN_UPLOAD_CACHE_BYTES) {
+            Map.Entry<String, byte[]> entry = oldest.next();
+            ownUploadCacheBytes -= entry.getValue().length;
+            oldest.remove();
+        }
+    }
+
+    /** Returns a copy of this client's uploaded bytes, or null when not cached. */
+    public static synchronized byte[] ownUploadBytes(String url) {
+        byte[] bytes = url == null ? null : OWN_UPLOADS.get(url);
+        return bytes == null ? null : bytes.clone();
+    }
 
     /** Synchronous upload (call on a worker thread). Returns the URL or null on failure. */
     public static String upload(byte[] bytes, String fileName,
@@ -78,6 +110,8 @@ public final class ImageUploader {
             String out = extractUrl(resp.body(), mode);
             if (out == null) {
                 LOGGER.info("[e33chat] upload {} -> unparsable response: {}", endpoint, resp.body());
+            } else {
+                rememberOwnUpload(out, bytes);
             }
             return out;
         } catch (Throwable t) {

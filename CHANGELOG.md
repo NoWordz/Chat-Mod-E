@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.5.0
+
+**修复**
+
+- 第三方图床上传成功后会在本地保留有上限的原始媒体缓存，发送者无需重新下载自己刚发出的静图或动图（三端）。
+
+----
+
+**Fixed**
+
+- Successful third-party uploads now retain a bounded local copy, so senders can display their own still and animated images without re-downloading them (all platforms).
+
 ## v2.4.17
 
 **修复：进服瞬间收到的聊天消息不再能把客户端踢下线（三端）**

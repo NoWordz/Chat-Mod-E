@@ -1,5 +1,17 @@
 # Release Notes
 
+## v2.5.0
+
+**修复**
+
+- 自己刚发出的静图和动图现在会从本机缓存显示；即使客户端无法连接图床下载域，也不再因此加载失败（三端）。
+
+----
+
+**Fixed**
+
+- Your newly sent still and animated images now display from a local cache, even when the client cannot reach the image host (all platforms).
+
 ## v2.4.17
 
 **修复**
