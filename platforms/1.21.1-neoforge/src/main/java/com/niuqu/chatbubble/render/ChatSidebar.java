@@ -32,7 +32,7 @@ public final class ChatSidebar {
                                               String whisperPartner, Font font,
                                               int screenX, boolean visible,
                                               EditBox searchBox, int scrollOffset, int groupScroll,
-                                              int listBottom) {
+                                              int columnBottom) {
         if (!visible) return false;
         int localX = (int)mouseX - screenX;
         if (localX < 0 || localX > WIDTH) return false;
@@ -46,7 +46,7 @@ public final class ChatSidebar {
 
         // Group rows (the 「我的群」 caption above them is not a target) and the pinned
         // create button — geometry from SidebarModel, shared by all targets.
-        int listEnd = SidebarModel.listBottom(listBottom);
+        int listEnd = SidebarModel.listBottom(columnBottom);
         int groupCount = groupCount();
         int firstRow = SidebarModel.groupFirstRow(groupCount, groupScroll);
         int lastRow = SidebarModel.groupWindowEnd(groupCount, firstRow);
@@ -55,7 +55,7 @@ public final class ChatSidebar {
             if (gy + ITEM_H > listEnd) break; // drawn clipped there too
             if (mouseY >= gy && mouseY <= gy + ITEM_H) return true;
         }
-        int btnY = SidebarModel.createButtonY(listBottom);
+        int btnY = SidebarModel.createButtonY(columnBottom);
         if (mouseY >= btnY && mouseY <= btnY + SidebarModel.CREATE_BTN_H
             && localX >= SidebarModel.createButtonX()
             && localX <= SidebarModel.createButtonX() + SidebarModel.createButtonW()) return true;
@@ -111,7 +111,7 @@ public final class ChatSidebar {
     // ---- Rendering (called from ChatBubbleScreen) ----
 
     public static int render(GuiGraphics g, Font font, int mouseX, int mouseY,
-                              ChatBubbleTheme.Colors c, int panelW, int msgBottom,
+                              ChatBubbleTheme.Colors c, int panelW,
                               String whisperPartner, ResourceLocation publicIcon,
                               ResourceLocation groupIcon,
                               ResourceLocation noOnlineIcon, ResourceLocation privateTipIcon,
@@ -170,8 +170,12 @@ public final class ChatSidebar {
         // ---- Group rows (2.5.0: groups left the top tab strip for this column).
         // All geometry comes from SidebarModel, so the three targets cannot drift. The
         // block shows at most SIDEBAR_GROUP_MAX_ROWS rows and scrolls beyond that.
-        int sidebarBottom = msgBottom > 0 ? msgBottom : screenH - ChatLayout.BAR_H;
-        int listEnd = SidebarModel.listBottom(sidebarBottom);
+        // The column runs the full window height (see the background fill above), so its
+        // bottom edge is screenH. That is the anchor for both the list bottom and the
+        // pinned create button: anchoring on the message-area bottom instead left the
+        // button floating a full bar's height above the window edge.
+        int columnBottom = screenH;
+        int listEnd = SidebarModel.listBottom(columnBottom);
         int groupCount = groupCount();
         if (groupCount > 0) {
             List<String> groups = groupTabs();
@@ -310,9 +314,10 @@ public final class ChatSidebar {
             }
         }
 
-        // 「＋ 创建群组」: the standalone button pinned above the input bar (its own strip;
-        // the group block above it stops at the block's lower bound).
-        int btnY = SidebarModel.createButtonY(sidebarBottom);
+        // 「＋ 创建群组」: pinned into the sidebar's share of the bottom bar, on the same
+        // line as the input row's icons (the column runs to the window bottom, so that is
+        // the anchor — see render()). The group block above stops at the block's own bound.
+        int btnY = SidebarModel.createButtonY(columnBottom);
         int btnX = SidebarModel.createButtonX();
         int btnW = SidebarModel.createButtonW();
         boolean hoverBtn = mouseX >= btnX && mouseX <= btnX + btnW

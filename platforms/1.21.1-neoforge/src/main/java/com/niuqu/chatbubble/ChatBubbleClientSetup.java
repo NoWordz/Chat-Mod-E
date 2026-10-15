@@ -37,6 +37,8 @@ public class ChatBubbleClientSetup {
                                                   ProfilerFiller prepProfiler, ProfilerFiller reloadProfiler,
                                                   Executor backgroundExecutor, Executor gameExecutor) {
                 // 纹理全部走 blit(RL) 懒加载（getTexture 自动 new SimpleTexture），F3+T 重载后自动重读资源包新 PNG
+                // 字体笔画宽度也可能随资源包变化，通知高度缓存失效
+                com.niuqu.chatbubble.render.ChatBubbleScreen.onClientResourceReload();
                 return barrier.wait(null);
             }
         });

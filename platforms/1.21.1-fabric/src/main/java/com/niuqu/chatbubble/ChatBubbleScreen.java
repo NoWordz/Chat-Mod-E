@@ -206,10 +206,16 @@ public class ChatBubbleScreen extends ChatScreen {
     private boolean inviteSubmenuOpen;
     private String inviteSubmenuTarget;
 
-    // Per-frame wrap cache: every message is measured once (layout pass) and
+    // Message-height cache: every message is measured once (layout pass) and
     // rendered once (bubble pass), and both call getMsgHeight -> wrapContent.
     // Without the cache each message gets re-wrapped 3x per frame.
-    private final Map<ChatMessageStore.ChatMessage, Integer> msgHeightCache =
+    //
+    // Cross-open: the chat screen is a fresh instance on every open, so an
+    // instance-scoped cache starts cold and re-measures the whole history on the
+    // first frame — the visible open hitch once history is long. A height is a pure
+    // function of (message identity, layout inputs), so the cache is static and is
+    // dropped only when an input changes (see ensureHeightCache).
+    private static final Map<ChatMessageStore.ChatMessage, Integer> msgHeightCache =
         new IdentityHashMap<>();
 
     // Image cards: parsed once per message (bracket strip + refs), invalidated
@@ -620,8 +626,7 @@ public class ChatBubbleScreen extends ChatScreen {
             String caption = Text.translatable("e33chat.group.my_groups_header").getString();
             // Same guards as the neo/forge twins: the caption and the window are clipped to
             // the list bottom, so nothing is painted where the click path rejects clicks.
-            int blockEnd = com.niuqu.chatbubble.logic.SidebarModel.listBottom(
-                msgBottom > 0 ? msgBottom : height - BAR_H);
+            int blockEnd = com.niuqu.chatbubble.logic.SidebarModel.listBottom(height);
             int captionY = com.niuqu.chatbubble.logic.SidebarModel.groupTitleY(groupCount);
             if (captionY + com.niuqu.chatbubble.logic.SidebarModel.GROUP_TITLE_H <= blockEnd)
                 g.drawText(textRenderer, caption, 4, captionY, c().textMuted(), false);
@@ -675,9 +680,9 @@ public class ChatBubbleScreen extends ChatScreen {
             String filter = sidebarSearchBox.getText().toLowerCase().trim();
 
             int startY = com.niuqu.chatbubble.logic.SidebarModel.playerStartY(groupCount);
-            int visibleBottom = msgBottom > 0 ? msgBottom : height - BAR_H;
-            int listEnd = com.niuqu.chatbubble.logic.SidebarModel.listBottom(
-                visibleBottom);
+            // The column runs to the window bottom (see the SIDEBAR_BG fill above): that is
+            // the anchor for the list bottom and the pinned create button, not msgBottom.
+            int listEnd = com.niuqu.chatbubble.logic.SidebarModel.listBottom(height);
             int totalH = 0;
             for (var info : players) {
                 String name = info.getProfile().getName();
@@ -750,8 +755,9 @@ public class ChatBubbleScreen extends ChatScreen {
             }
         }
 
-        // 「＋ 创建群组」: the standalone button pinned above the input bar.
-        int createY = SidebarModel.createButtonY(msgBottom > 0 ? msgBottom : height - BAR_H);
+        // 「＋ 创建群组」: pinned into the bottom bar's sidebar cell, on the same line as
+        // the input row's icons (the column runs to the window bottom).
+        int createY = SidebarModel.createButtonY(height);
         int createX = SidebarModel.createButtonX();
         int createW = SidebarModel.createButtonW();
         boolean hoverCreate = mouseX >= createX && mouseX <= createX + createW
@@ -1276,9 +1282,9 @@ public class ChatBubbleScreen extends ChatScreen {
             // Clipped to the list bottom exactly like the draw, so a group row can never
             // shadow the create button below it.
             java.util.List<String> sidebarTabs = groupTabs();
-            int sidebarBottom = msgBottom > 0 ? msgBottom : height - BAR_H;
+            int sidebarColumnBottom = height;
             int sidebarListEnd = com.niuqu.chatbubble.logic.SidebarModel.listBottom(
-                sidebarBottom);
+                sidebarColumnBottom);
             int firstGroupRow = com.niuqu.chatbubble.logic.SidebarModel.groupFirstRow(
                 sidebarTabs.size(), sidebarGroupScroll);
             int lastGroupRow = com.niuqu.chatbubble.logic.SidebarModel.groupWindowEnd(
@@ -1296,8 +1302,8 @@ public class ChatBubbleScreen extends ChatScreen {
                     sidebarSearchBox.setText(""); setFocused(chatField); scrollToBottom = true; return true;
                 }
             }
-            // 「＋ 创建群组」: the standalone button pinned above the input bar.
-            if (isCreateButtonHit(mouseY, origX - sidebarX, sidebarBottom)) {
+            // 「＋ 创建群组」: the standalone button pinned into the bottom bar's sidebar cell.
+            if (isCreateButtonHit(mouseY, origX - sidebarX, sidebarColumnBottom)) {
                 openGroupBrowserForCreate();
                 return true;
             }
@@ -2163,37 +2169,65 @@ public class ChatBubbleScreen extends ChatScreen {
         if (groupCreateInput != null) groupCreateInput.setVisible(false);
     }
 
-    // ---- Layout + parse cache (audit P1/P3): reuse across frames, prune on change ----
-    private long layoutRevision = Long.MIN_VALUE;
-    private int layoutImageVersion = Integer.MIN_VALUE;
-    private int layoutPanelW = -1;
-    private int layoutFontH = -1;
-    private ChatBubbleTheme layoutTheme;
+    // ---- Layout + parse cache (audit P1/P3 + M7 A2): reuse across frames/opens ----
     private long lastParseRevision = Long.MIN_VALUE;
 
+    // Static so they survive the fresh ChatBubbleScreen created on every chat open.
+    private static int layoutImageVersion = Integer.MIN_VALUE;
+    private static int layoutPanelW = -1;
+    private static int layoutFontH = -1;
+    private static ChatBubbleTheme layoutTheme;
+    private static int layoutAvatar = -1;
+    private static int layoutBubble = -1;
+    private static boolean layoutReceiveImages = true;
+    private static long layoutReloadGenSeen = Long.MIN_VALUE;
+
+    // A client resource reload can change the chat font's glyph metrics in place (the
+    // Font is mutated, not replaced), so font height cannot detect it. The reload
+    // listener bumps this; it is part of the layout key.
+    private static volatile long layoutReloadGen;
+
+    /** Bumped from the client resource-reload listener; see {@link #layoutReloadGen}. */
+    public static void onClientResourceReload() { layoutReloadGen++; }
+
     /**
-     * Drop the per-row height cache only when something it depends on changed: the
-     * message content revision, the media version, the panel width, the font and
-     * the theme. An image-bearing list keeps the old per-frame clear because a
-     * decode finishing changes its height in a way the media version does not
-     * always signal.
+     * Drop the per-row height cache only when an input it depends on changed.
+     *
+     * <p>The former per-frame full-list {@code getString().contains("[[CICode")} scan
+     * is gone: it cleared the cache on every frame of any image-bearing list (M7 A2),
+     * making its own optimisation moot. Image-driven height changes are covered by
+     * {@link ImageLoader#version()} instead — every height-affecting image transition
+     * (static load/fail, animated ready/release/fail) bumps it. Heights are keyed by
+     * message identity and a content edit installs a new record, so no content
+     * revision is needed here to catch an edit.
      */
-    private void beginLayoutPass(List<ChatMessageStore.ChatMessage> messages) {
-        long rev = ChatMessageStore.contentRevision();
+    private void ensureHeightCache() {
         int imgV = ImageLoader.version();
-        boolean mediaPending = false;
-        for (var m : messages) {
-            if (m.content().getString().contains("[[CICode")) { mediaPending = true; break; }
-        }
-        if (mediaPending || rev != layoutRevision || imgV != layoutImageVersion
-                || panelW != layoutPanelW || textRenderer.fontHeight != layoutFontH
-                || theme() != layoutTheme) {
+        int avatar = Appearance.avatarSize();
+        int bubble = Appearance.bubbleSizePx();
+        boolean recvImg = ChatBubbleClientSetup.config().receiveImages();
+        ChatBubbleTheme th = theme();
+        if (imgV != layoutImageVersion || panelW != layoutPanelW
+                || textRenderer.fontHeight != layoutFontH || th != layoutTheme
+                || avatar != layoutAvatar || bubble != layoutBubble
+                || recvImg != layoutReceiveImages || layoutReloadGen != layoutReloadGenSeen) {
             msgHeightCache.clear();
-            layoutRevision = rev;
             layoutImageVersion = imgV;
             layoutPanelW = panelW;
             layoutFontH = textRenderer.fontHeight;
-            layoutTheme = theme();
+            layoutTheme = th;
+            layoutAvatar = avatar;
+            layoutBubble = bubble;
+            layoutReceiveImages = recvImg;
+            layoutReloadGenSeen = layoutReloadGen;
+        }
+        // Entries for messages that left the list have no live key and would linger
+        // for the session; trim them (the store's own cap does not bound this map).
+        if (msgHeightCache.size() > ChatMessageStore.size() * 2 + 1024) {
+            java.util.Set<ChatMessageStore.ChatMessage> live =
+                java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+            live.addAll(ChatMessageStore.getMessages());
+            msgHeightCache.keySet().retainAll(live);
         }
     }
 
@@ -2220,7 +2254,7 @@ public class ChatBubbleScreen extends ChatScreen {
                 ChatMessageStore.getPublicMessages(),
                 com.niuqu.chatbubble.chat.GroupChannelState.active());
         }
-        beginLayoutPass(messages);
+        ensureHeightCache();
 
         // 2.4.10: 群组页签条（占位后移消息视口；无消息也要画，画完再退出）
         int tabStripH = 0;
@@ -3777,6 +3811,7 @@ public class ChatBubbleScreen extends ChatScreen {
 
 
     private void jumpToMessage(int msgIndex) {
+        ensureHeightCache();
         var msgs = ChatMessageStore.getMessages();
         if (msgIndex < 0 || msgIndex >= msgs.size()) return;
         if (!com.niuqu.chatbubble.chat.GroupChannelState.isVisible(msgs.get(msgIndex))) return;

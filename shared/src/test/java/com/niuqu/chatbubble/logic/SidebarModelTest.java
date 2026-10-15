@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Geometry facts pinned against the live code (baseline 26e1e92e):
  *  - row height / step 22 / 24  -> ChatSidebar.java:22 ITEM_H, row advance ITEM_H+2
  *  - public row top 19          -> 2 + SEARCH_H(14) + 3
- *  - list bottom 248 / button 252 for a 278px msg area -> SidebarModel.createButtonY/listBottom
+ *  - list bottom 293 / button 297 for a 320px-tall column -> SidebarModel.createButtonY/listBottom
  */
 class SidebarModelTest {
 
@@ -66,12 +66,12 @@ class SidebarModelTest {
     }
 
     @Test void groupBlockNeverReachesThePinnedCreateButton() {
-        // the button is pinned to the list bottom; the capped block must stay above it
-        int listEnd = SidebarModel.listBottom(278);
+        // the button is pinned to the column bottom; the capped block must stay above it
+        int listEnd = SidebarModel.listBottom(320);
         assertTrue(SidebarModel.playerStartY(50) < listEnd,
             "50 groups must not push the player list into/past the button strip");
-        assertEquals(248, listEnd);
-        assertEquals(252, SidebarModel.createButtonY(278));
+        assertEquals(293, listEnd);
+        assertEquals(297, SidebarModel.createButtonY(320));
     }
 
     // ---- create button frame ----
@@ -106,29 +106,36 @@ class SidebarModelTest {
         assertEquals(UiLayout.centerX(0, SidebarModel.WIDTH, 63), SidebarModel.createButtonTextX(63));
     }
 
-    @Test void createButtonKeepsItsOwnStripBelowTheLists() {
-        int panelBottom = 278;
-        int btnTop = SidebarModel.createButtonY(panelBottom);
-        int listEnd = SidebarModel.listBottom(panelBottom);
+    @Test void createButtonSharesTheBottomBarRow() {
+        // The button is centred in a 26px bottom bar, so it sits on the same line as the
+        // input row's icons. Pinned against the 2.5.0 bug where it floated a full bar's
+        // height above the window bottom with a dead strip beneath it.
+        int columnBottom = 320;
+        int btnTop = SidebarModel.createButtonY(columnBottom);
+        int listEnd = SidebarModel.listBottom(columnBottom);
         int btnBottom = btnTop + SidebarModel.CREATE_BTN_H;
         assertTrue(listEnd < btnTop, "the list must end above the button frame");
         assertEquals(SidebarModel.CREATE_LIST_GAP, btnTop - listEnd);
-        assertEquals(SidebarModel.CREATE_BOTTOM_INSET, panelBottom - btnBottom,
-            "the button must not sit flush against the panel bottom");
+        assertEquals(3, SidebarModel.CREATE_BOTTOM_INSET,
+            "(26 - 20) / 2 — the button's slack inside the bottom bar");
+        assertEquals(SidebarModel.CREATE_BOTTOM_INSET, columnBottom - btnBottom,
+            "the button is centred in the bar, not flush against the window bottom");
+        // 26 is ChatLayout.BAR_H; the forge/neo wiring test binds the two symbols directly.
+        assertEquals(26, SidebarModel.BOTTOM_BAR_H, "must mirror ChatLayout.BAR_H");
     }
 
     @Test void createButtonHitUsesTheDrawnFrame() {
         // The hit band must be exactly the frame drawn from createButtonX/createButtonW,
         // so a hard-coded draw (old `4`/`WIDTH-8`) can never drift from the hit again.
-        int panelBottom = 278;
-        int top = SidebarModel.createButtonY(panelBottom);
+        int columnBottom = 320;
+        int top = SidebarModel.createButtonY(columnBottom);
         int left = SidebarModel.createButtonX();
         int right = left + SidebarModel.createButtonW();
-        assertEquals(SidebarModel.Row.CREATE, hit(top, left, 0, 0, 0, panelBottom), "top-left corner");
-        assertEquals(SidebarModel.Row.CREATE, hit(top + SidebarModel.CREATE_BTN_H, right, 0, 0, 0, panelBottom),
+        assertEquals(SidebarModel.Row.CREATE, hit(top, left, 0, 0, 0, columnBottom), "top-left corner");
+        assertEquals(SidebarModel.Row.CREATE, hit(top + SidebarModel.CREATE_BTN_H, right, 0, 0, 0, columnBottom),
             "bottom-right corner");
-        assertEquals(SidebarModel.Row.NONE, hit(top, left - 1, 0, 0, 0, panelBottom), "one px left of the frame");
-        assertEquals(SidebarModel.Row.NONE, hit(top, right + 1, 0, 0, 0, panelBottom), "one px right of the frame");
+        assertEquals(SidebarModel.Row.NONE, hit(top, left - 1, 0, 0, 0, columnBottom), "one px left of the frame");
+        assertEquals(SidebarModel.Row.NONE, hit(top, right + 1, 0, 0, 0, columnBottom), "one px right of the frame");
     }
 
     // ---- hit testing ----
@@ -153,19 +160,19 @@ class SidebarModelTest {
     }
 
     @Test void createButtonOnlyInItsOwnBandAndSidebarX() {
-        assertEquals(SidebarModel.Row.CREATE, hit(252, 40, 0, 0, 0, 278), "top edge");
-        assertEquals(SidebarModel.Row.CREATE, hit(272, 40, 0, 0, 0, 278), "bottom edge");
-        assertEquals(SidebarModel.Row.NONE, hit(273, 40, 0, 0, 0, 278));
-        assertEquals(SidebarModel.Row.NONE, hit(252, 2, 0, 0, 0, 278), "left of the 6px inset");
-        assertEquals(SidebarModel.Row.NONE, hit(252, 88, 0, 0, 0, 278), "right of the 6px inset");
+        assertEquals(SidebarModel.Row.CREATE, hit(297, 40, 0, 0, 0, 320), "top edge");
+        assertEquals(SidebarModel.Row.CREATE, hit(317, 40, 0, 0, 0, 320), "bottom edge 297+20");
+        assertEquals(SidebarModel.Row.NONE, hit(318, 40, 0, 0, 0, 320));
+        assertEquals(SidebarModel.Row.NONE, hit(297, 2, 0, 0, 0, 320), "left of the 6px inset");
+        assertEquals(SidebarModel.Row.NONE, hit(297, 88, 0, 0, 0, 320), "right of the 6px inset");
     }
 
     @Test void longGroupListCannotShadowTheCreateButton() {
         // 20 groups, scrolled to the tail: the visible block stays above the button, so a
         // click in the button band selects CREATE, never a group row (uireview.md §2.3).
         int scroll = SidebarModel.groupMaxScroll(20);
-        assertEquals(SidebarModel.Row.CREATE, hit(260, 40, 20, 0, scroll, 278));
-        assertEquals(SidebarModel.Row.GROUP, hit(153, 40, 20, 0, scroll, 278), "last visible row");
+        assertEquals(SidebarModel.Row.CREATE, hit(303, 40, 20, 0, scroll, 320));
+        assertEquals(SidebarModel.Row.GROUP, hit(153, 40, 20, 0, scroll, 320), "last visible row");
     }
 
     @Test void playerRowsFollowTheScrollOffset() {
@@ -186,9 +193,9 @@ class SidebarModelTest {
     }
 
     @Test void squeezedPlayerListHasNoHits() {
-        // group block caps playerStartY at 201; a 220px panel leaves listEnd 190, so no
-        // player row fits. The band just under the list is the dead gap before the button
-        // (which now sits 4px lower-space above the panel bottom).
+        // group block caps playerStartY at 201; a 220px-tall column leaves listEnd 193, so
+        // no player row fits. The band just under the list is the dead gap before the
+        // button (which now shares the bottom bar at the column's very foot).
         int listEnd = SidebarModel.listBottom(220);
         assertEquals(SidebarModel.Row.NONE, hit(listEnd + 1, 40, 20, 3, 0, 220));
         assertEquals(SidebarModel.Row.CREATE, hit(SidebarModel.createButtonY(220), 40, 20, 3, 0, 220),
@@ -197,11 +204,11 @@ class SidebarModelTest {
 
     // ---- helpers ----
 
-    private static SidebarModel.Row hit(int y, int x, int groups, int players, int scroll, int panelBottom) {
-        return SidebarModel.hit(y, x, groups, players, scroll, 0, panelBottom).row();
+    private static SidebarModel.Row hit(int y, int x, int groups, int players, int scroll, int columnBottom) {
+        return SidebarModel.hit(y, x, groups, players, scroll, 0, columnBottom).row();
     }
 
-    private static int hitIndex(int y, int x, int groups, int players, int scroll, int panelBottom) {
-        return SidebarModel.hit(y, x, groups, players, scroll, 0, panelBottom).index();
+    private static int hitIndex(int y, int x, int groups, int players, int scroll, int columnBottom) {
+        return SidebarModel.hit(y, x, groups, players, scroll, 0, columnBottom).index();
     }
 }

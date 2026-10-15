@@ -1,5 +1,23 @@
 # Changelog
 
+## v2.5.0
+
+**修复：长聊天记录下打开/浏览聊天框卡顿（三端）**
+
+- 消息高度缓存原先每帧清空，导致每条消息每帧都被重新做一次文本换行测量（`wrapContent` → `wrapLines`），历史越长越卡；群组线还叠了两层更早的清空（每来一条新消息清一次、列表含图片码即每帧清空），缓存因此基本失效——这也是 M7 静态审计记的 A2
+- 高度只依赖「消息身份 + 少量布局输入」，缓存改为静态、跨帧跨开合保留，仅在输入变化时失效：图片状态版本、面板宽度、字体高度、主题、头像尺寸、气泡尺寸、接收图片开关、客户端资源重载
+- 删除每帧全表 `getString().contains("[[CICode")` 扫描；图片高度变化改由图片状态版本覆盖，并补齐动画加载器的三处版本号（纹理释放、单帧回退、加载失败），避免缓存留下过期高度
+- 侧栏「创建群组」按钮对齐到底栏（同工作区此前的未提交改动一并入库）
+
+----
+
+**Fixed: chat open / scrolling stutters with long history (all platforms)**
+
+- The message-height cache was cleared every frame, so every message was re-measured (text re-wrapped) on every frame — worse the longer the history. The group line added two earlier clears on top (once per new message, and every frame for any list containing an image code), so the cache was largely defeated — this is M7 audit item A2
+- A height depends only on the message identity plus a few layout inputs, so the cache is now static, survives frames and chat reopens, and is dropped only when an input changes: image-state version, panel width, font height, theme, avatar size, bubble size, receive-images toggle, client resource reload
+- Removed the per-frame full-list `getString().contains("[[CICode")` scan; image-driven height changes are covered by the image-state version, whose bump points now include the animated loader's three transitions (texture release, static fallback, load failure) so the cache cannot keep a stale height
+- The sidebar "create group" button is anchored to the bottom bar (previously uncommitted work in this worktree, committed alongside)
+
 ## v2.4.17
 
 **修复：进服瞬间收到的聊天消息不再能把客户端踢下线（三端）**

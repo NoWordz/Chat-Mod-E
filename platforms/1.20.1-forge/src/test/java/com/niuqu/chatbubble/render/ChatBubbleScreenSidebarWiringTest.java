@@ -117,7 +117,7 @@ class ChatBubbleScreenSidebarWiringTest {
 
     @Test
     void groupRowFittingAboveTheListBottomIsClickable() {
-        int listEnd = SidebarModel.listBottom(278);
+        int listEnd = SidebarModel.listBottom(320);
         int gy = SidebarModel.groupWindowRowY(20, 20, 16); // scrolled to the tail
         assertTrue(ChatBubbleScreen.isGroupRowVisible(gy, listEnd));
         assertTrue(ChatBubbleScreen.isGroupRowHit(gy, gy));
@@ -126,7 +126,7 @@ class ChatBubbleScreenSidebarWiringTest {
 
     @Test
     void groupRowCrossingTheListBottomIsNotClickable() {
-        int listEnd = SidebarModel.listBottom(278);
+        int listEnd = SidebarModel.listBottom(320);
         assertFalse(ChatBubbleScreen.isGroupRowVisible(listEnd - SidebarModel.ROW_H + 1, listEnd),
             "the half-row that the draw clips can never be a hit");
         assertTrue(ChatBubbleScreen.isGroupRowVisible(listEnd - SidebarModel.ROW_H, listEnd));
@@ -136,20 +136,37 @@ class ChatBubbleScreenSidebarWiringTest {
 
     @Test
     void createButtonHitIsItsOwnBandAndSideInset() {
-        int panelBottom = 278;
-        int top = SidebarModel.createButtonY(panelBottom);
+        int columnBottom = 320;
+        int top = SidebarModel.createButtonY(columnBottom);
         int left = SidebarModel.createButtonX();
         int right = left + SidebarModel.createButtonW();
         int midX = (left + right) / 2;
-        assertTrue(ChatBubbleScreen.isCreateButtonHit(top, midX, panelBottom), "top edge");
+        assertTrue(ChatBubbleScreen.isCreateButtonHit(top, midX, columnBottom), "top edge");
         assertTrue(ChatBubbleScreen.isCreateButtonHit(
-            top + SidebarModel.CREATE_BTN_H, midX, panelBottom), "bottom edge");
-        assertFalse(ChatBubbleScreen.isCreateButtonHit(top - 1, midX, panelBottom), "above the button");
+            top + SidebarModel.CREATE_BTN_H, midX, columnBottom), "bottom edge");
+        assertFalse(ChatBubbleScreen.isCreateButtonHit(top - 1, midX, columnBottom), "above the button");
         // The hit band is the drawn frame from createButtonX/createButtonW — an old
         // hard-coded `4`/`WIDTH-8` draw would no longer line up with these edges.
-        assertTrue(ChatBubbleScreen.isCreateButtonHit(top, left, panelBottom), "left frame edge");
-        assertTrue(ChatBubbleScreen.isCreateButtonHit(top, right, panelBottom), "right frame edge");
-        assertFalse(ChatBubbleScreen.isCreateButtonHit(top, left - 1, panelBottom), "left of the inset");
-        assertFalse(ChatBubbleScreen.isCreateButtonHit(top, right + 1, panelBottom), "right of the inset");
+        assertTrue(ChatBubbleScreen.isCreateButtonHit(top, left, columnBottom), "left frame edge");
+        assertTrue(ChatBubbleScreen.isCreateButtonHit(top, right, columnBottom), "right frame edge");
+        assertFalse(ChatBubbleScreen.isCreateButtonHit(top, left - 1, columnBottom), "left of the inset");
+        assertFalse(ChatBubbleScreen.isCreateButtonHit(top, right + 1, columnBottom), "right of the inset");
+    }
+
+    /**
+     * The button is centred in the bottom bar using the model's own {@code BOTTOM_BAR_H}.
+     * That constant must track the real {@code ChatLayout.BAR_H}; if the bar is ever
+     * resized and only one of the two moves, the button silently leaves the icon row.
+     */
+    @Test
+    void bottomBarHeightIsBoundToTheRealBar() {
+        assertEquals(ChatLayout.BAR_H, SidebarModel.BOTTOM_BAR_H,
+            "SidebarModel.BOTTOM_BAR_H must mirror ChatLayout.BAR_H");
+        int columnBottom = 320;
+        int btnBottom = SidebarModel.createButtonY(columnBottom) + SidebarModel.CREATE_BTN_H;
+        assertEquals(columnBottom - ChatLayout.BAR_H / 2 - SidebarModel.CREATE_BTN_H / 2, SidebarModel.createButtonY(columnBottom),
+            "the button top sits half the bar's slack below the bar top");
+        assertEquals(columnBottom - SidebarModel.CREATE_BOTTOM_INSET, btnBottom,
+            "and half the slack above the window bottom");
     }
 }

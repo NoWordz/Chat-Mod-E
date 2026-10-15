@@ -255,6 +255,9 @@ public class ChatBubbleClientSetup implements ClientModInitializer {
                 @Override
                 public void reload(ResourceManager manager) {
                     RoundRectRenderer.resetShader();
+                    // A reload can change the chat font's glyph metrics; the height
+                    // cache keys on this generation to drop stale entries.
+                    ChatBubbleScreen.onClientResourceReload();
                 }
             }
         );

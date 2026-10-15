@@ -13,7 +13,8 @@ package com.niuqu.chatbubble.logic;
  *   <li>row height 22 / step 24 — {@code ChatSidebar.java:22 ITEM_H=22}, advance {@code ITEM_H+2}</li>
  *   <li>world row top 19 — {@code 2 + SEARCH_H(14) + 3}</li>
  *   <li>group title 45, first group row 57 — {@code _e33_250/uireview.md §1}</li>
- *   <li>list bottom / create button for a 278px area: 248 / 252 — {@code uireview.md §3}</li>
+ *   <li>bottom bar 26px tall, its icon row centred in it — {@code ChatLayout.BAR_H}, {@code ChatSidebar.ICON_S}</li>
+ *   <li>list bottom / create button for a 320px-tall column: 293 / 297 — {@code uireview.md §3}</li>
  * </ul>
  */
 public final class SidebarModel {
@@ -36,15 +37,30 @@ public final class SidebarModel {
     /** Height of the pinned 「＋ 创建群组」 button. */
     public static final int CREATE_BTN_H = 20;
     /**
+     * Height of the bottom bar the create button shares (the gear / input / emoji / send
+     * row). Mirrors {@code ChatLayout.BAR_H}; the forge/neo wiring test asserts the two
+     * agree, so a bar resize cannot silently strand the button again.
+     */
+    public static final int BOTTOM_BAR_H = 26;
+    /**
      * Left/right inset of the create button inside the sidebar. Both the draw and the
      * hit test read this: the frame spans {@code CREATE_INSET .. WIDTH - CREATE_INSET}
      * (see {@link #createButtonX()} / {@link #createButtonW()}), so it is symmetrically
      * centred in the column instead of edge-flush.
      */
     public static final int CREATE_INSET = 6;
-    /** Gap between the create button's lower edge and the bottom edge of the list area. */
-    public static final int CREATE_BOTTOM_INSET = 6;
-    /** Strip the create button keeps clear above itself, i.e. below the scrolling lists. */
+    /**
+     * Gap below the create button, derived so the 20px button is centred in the 26px
+     * bottom bar: {@code (26 - 20) / 2 = 3}. The button therefore sits on the same line
+     * as the input row's icons, instead of floating a bar's height above the window
+     * bottom with dead space beneath it — the 2.5.0 look this pins against.
+     */
+    public static final int CREATE_BOTTOM_INSET = (BOTTOM_BAR_H - CREATE_BTN_H) / 2;
+    /**
+     * Strip the create button keeps clear above itself. Together with
+     * {@link #BOTTOM_BAR_H} and {@link #CREATE_BOTTOM_INSET} it makes {@link #listBottom}
+     * land on the message-area bottom, so the scrolling lists use the whole column.
+     */
     public static final int CREATE_LIST_GAP = 4;
     /**
      * Invite-picker rows shown at once. The picker scrolls (row-granular) beyond
@@ -135,9 +151,14 @@ public final class SidebarModel {
         return WIDTH - 2 * CREATE_INSET;
     }
 
-    /** Top of the bottom-pinned 「＋ 创建群组」 button, from the list area's bottom edge. */
-    public static int createButtonY(int panelBottom) {
-        return panelBottom - CREATE_BTN_H - CREATE_BOTTOM_INSET;
+    /**
+     * Top of the bottom-pinned 「＋ 创建群组」 button, measured from the sidebar column's
+     * bottom edge. That edge is the window height: the column's background runs the full
+     * window, so anchoring on the message-area bottom instead would leave a bar-high dead
+     * strip under the button.
+     */
+    public static int createButtonY(int columnBottom) {
+        return columnBottom - CREATE_BTN_H - CREATE_BOTTOM_INSET;
     }
 
     /**
@@ -150,9 +171,13 @@ public final class SidebarModel {
         return createButtonX() + (createButtonW() - textWidth) / 2;
     }
 
-    /** Bottom of the scrolling lists: the create button keeps its own strip below it. */
-    public static int listBottom(int panelBottom) {
-        return createButtonY(panelBottom) - CREATE_LIST_GAP;
+    /**
+     * Bottom of the scrolling lists. The create button keeps its own strip below them,
+     * inside the bottom bar; with the current tokens this resolves to the message-area
+     * bottom ({@code columnBottom - 27}), so the lists reach the input bar.
+     */
+    public static int listBottom(int columnBottom) {
+        return createButtonY(columnBottom) - CREATE_LIST_GAP;
     }
 
     // ---- hit testing ----
@@ -184,12 +209,14 @@ public final class SidebarModel {
      * @param playerCount  visible player rows (already filtered by the caller)
      * @param scrollOffset player-list pixel scroll
      * @param groupScroll  group-block pixel scroll
-     * @param panelBottom  bottom edge of the list area (msgBottom, or its fallback)
+     * @param columnBottom bottom edge of the sidebar column — the window height, since
+     *                     the column's background spans the whole window. The message
+     *                     area ends a bar's height above it (see {@link #BOTTOM_BAR_H}).
      */
     public static Hit hit(int y, int x, int groupCount, int playerCount,
-                          int scrollOffset, int groupScroll, int panelBottom) {
-        int listEnd = listBottom(panelBottom);
-        int createY = createButtonY(panelBottom);
+                          int scrollOffset, int groupScroll, int columnBottom) {
+        int listEnd = listBottom(columnBottom);
+        int createY = createButtonY(columnBottom);
 
         if (y >= PUBLIC_Y && y <= PUBLIC_Y + ROW_H) {
             return new Hit(Row.WORLD, -1);

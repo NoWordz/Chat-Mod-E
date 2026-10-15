@@ -284,8 +284,12 @@ public final class AnimatedImageLoader {
      *  release itself is marshalled to the render thread). */
     private static void releaseTextures(Entry entry) {
         ResourceLocation[] ids = entry.frames;
+        boolean wasReady = entry.ready;
         entry.frames = null;
         entry.ready = false;
+        // Released while still marked ready: the cached bubble height for
+        // image messages is now stale, so signal the image-state version.
+        if (wasReady) ImageLoader.VERSION.incrementAndGet();
         if (ids == null || ids.length == 0) return;
         Minecraft.getInstance().execute(() -> {
             var textureManager = Minecraft.getInstance().getTextureManager();
@@ -346,6 +350,7 @@ public final class AnimatedImageLoader {
                 // Real single-frame file: stop retrying, let the static
                 // ImageLoader take over permanently.
                 entry.staticImage = true;
+                ImageLoader.VERSION.incrementAndGet();
                 return;
             }
             Minecraft.getInstance().execute(() -> {
@@ -681,6 +686,7 @@ public final class AnimatedImageLoader {
         private void markFailed() {
             failed = true;
             failedAt = System.currentTimeMillis();
+            ImageLoader.VERSION.incrementAndGet();
         }
     }
 
